@@ -404,7 +404,7 @@ function demoState(R){
       crystals:{jade_crystal:{state:"FOUND", total_placed:14}, amber_crystal:{state:"FOUND", total_placed:13}, topaz_crystal:{state:"NOT_FOUND", total_placed:12}, sapphire_crystal:{state:"FOUND", total_placed:13}, amethyst_crystal:{state:"FOUND", total_placed:13}}},
     jacobs_contest:{perks:{double_drops:9, farming_level_cap:4}, medals_inv:{gold:3, silver:12, bronze:40}, contests:Object.fromEntries(Array.from({length:212}, (_, i) => ["c" + i, {}])), unique_brackets:{bronze:[1], silver:[1], gold:[1]}},
     trophy_fish:{total_caught:1840, rewards:[1, 2], sulphur_skitter:40, sulphur_skitter_bronze:30, sulphur_skitter_silver:9, sulphur_skitter_gold:1, blobfish:300, blobfish_bronze:280, blobfish_silver:20, lava_horse:12, lava_horse_bronze:12, golden_fish:2, golden_fish_bronze:2, flyfish:30, flyfish_bronze:25, flyfish_silver:5, obfuscated_fish_1:60, obfuscated_fish_1_bronze:55, obfuscated_fish_1_silver:4, obfuscated_fish_1_gold:1},
-    rift:{enigma:{found_souls:Array(31).fill("x")}, gallery:{secured_trophies:[{type:"wyldly_supreme"}, {type:"chicken_n_egg"}, {type:"citizen"}, {type:"slime"}]}, dead_cats:{found_cats:Array(6).fill("cat"), montezuma:{tier:"EPIC"}}, castle:{grubber_stacks:3}, access:{consumed_prism:true}, wither_cage:{killed_eyes:["a","b","c"]}},
+    rift:{enigma:{found_souls:Array(31).fill("x"), bought_cloak:true}, gallery:{secured_trophies:[{type:"wyldly_supreme"}, {type:"chicken_n_egg"}, {type:"citizen"}, {type:"slime"}]}, dead_cats:{found_cats:Array(6).fill("cat"), montezuma:{tier:"EPIC"}}, castle:{grubber_stacks:3}, access:{consumed_prism:true}, wither_cage:{killed_eyes:["a","b","c"]}},
     currencies:{motes_purse:48211, essence:{WITHER:{current:1820}, UNDEAD:{current:22400}, DRAGON:{current:640}, SPIDER:{current:310}, GOLD:{current:1200}}},
     player_stats:{rift:{lifetime_motes_earned:612400}},
     fairy_soul:{total_collected:241},
@@ -2452,7 +2452,7 @@ function skillExtraHTML(st, id){
 }
 
 // ---------- Rift ----------
-function viewRift(st){
+function riftOverviewHTML(st){
   const me = st.raw || {}, r = me.rift || {};
   const has = Object.keys(r).length > 0;
   const souls = (dig(r, "enigma.found_souls") || []).length;
@@ -2478,7 +2478,7 @@ function viewRift(st){
       ${row(cats.length >= 9, "Montezuma soul pieces", `${cats.length}/9`, 9, "Each piece gives +15 Rift Time. 6 pieces make the pet Epic.")}
       ${row(prism === true, "Rift Prism", prism === true ? "consumed" : prism === false ? "not yet" : "—", 0, "Consume it for permanent Rift Time.")}
       ${row((burgers || 0) >= 5, "McGrubber's Burgers", burgers != null ? `${burgers}/5` : "—", 5, "Eat them in the castle for permanent Rift bonuses.")}
-      ${row(false, "Porhtal's eyes killed", eyes.length, 0, "Wither Cage eyes around the Rift.")}
+      ${row(eyes.length >= 7, "Porhtal's eyes", `${eyes.length}/7`, 7, "Calm each eye for a fast-travel point. See the Quests tab.")}
       ${row(vamp?.maxed, "Riftstalker Bloodfiend", vamp ? `level ${vamp.level}/${vamp.max}` : "—", vamp?.max || 0, "Vampire slayer in Stillgore Château. See the Slayers tab.")}
     </tbody></table></div></div>
     <div><h3 class="ph">Timecharms</h3><div class="card"><table><tbody>
@@ -2487,6 +2487,144 @@ function viewRift(st){
       </tbody></table></div>
       ${charms.length ? `<p class="muted small">From your profile: ${charms.map(t => esc(prettyKey(t.type || t))).join(", ")}</p>` : ""}
       <p class="muted small">Counts from the wiki: 52 Enigma Souls, 8 Timecharms, 9 Montezuma pieces. The ✓ marks match your secured trophies by name, so one may show unchecked if Hypixel's internal name differs.</p></div></div>`;
+}
+
+// Rift Guide quests, from the wiki's Rift Guide page, grouped by area.
+// [id, name, what to do, auto-check]. auto: "eye" = Porhtal eye (done when all 7 are calmed),
+// "cat" = Montezuma fragment (done when all 9 are found), "charm:<pattern>" = done when that timecharm is secured,
+// "cloak" = Enigma cloak bought, "vamp" = Riftstalker slayer started.
+const RIFT_QUESTS = [
+  ["Wizard Tower", [
+    ["guide", "Unlock the Rift Guide", "Speak with Wizard But Weird at the top of the tower."],
+    ["eye1", "Eye: The Intruder", "Calm Porhtal's first eye. Unlocks fast travel to the Wizard Tower.", "eye"],
+  ]],
+  ["Wyld Woods", [
+    ["cruxtal", "Craft the Crux Talisman", "Kill Shies and craft Shy Cruxes."],
+    ["boatglue", "Reed's Boat: Powerful Glue", "Give Reed 16 Larva Silk."],
+    ["bughunter", "Help out Bughunter", "Give Argofay Bughunter 8 Bottled Odonata."],
+    ["cat1", "Montezuma's First", "Fragment under a tree.", "cat"],
+    ["sirius", "Help Inverted Sirius", "Get the Stability Elixir from the Shifted Tavern. Unlocks Rift-Transferable items."],
+    ["jacquelle", "Talk to Sad Jacquelle", "Find her cat on a branch next to her house. Gives the Montezuma pet."],
+    ["porhtal", "Talk to Porhtal", "Learn about calming his eyes for fast travel."],
+    ["cloak", "Wear Enigma's Cloak", "Talk to Enigma at the base of the Wizard Tower.", "cloak"],
+    ["threebros", "Talk to the Threebrothers", "Buy the Wyld Sword."],
+    ["wyldarmor", "Wear the Wyld Armor Set", "Buy a full set from the Argofay Traffickers."],
+  ]],
+  ["Rift Gallery", [
+    ["cat2", "Montezuma's Second", "In a house opened with a stone button.", "cat"],
+  ]],
+  ["Black Lagoon", [
+    ["cat3", "Montezuma's Third", "Behind the waterfall to the Leeches Lair.", "cat"],
+    ["deadgehog", "Slay Deadgehogs", "Craft the Not-Dead-Gehog Mask."],
+    ["leech", "Defeat the Leech Supreme", "In the Leeches Lair. Leads to the Supreme Timecharm.", "charm:supreme"],
+    ["eye2", "Eye: The Gill-Man", "Porhtal's eye in the Lagoon Hut.", "eye"],
+    ["boat", "Talk to Reed", "Hand in the ingredients and buy the Rift Boat."],
+  ]],
+  ["West Village", [
+    ["cruxring", "Craft the Crux Ring", "Kill Shadows and craft Shadow Cruxes."],
+    ["mirror", "Complete the Mirrorverse", "Finish all seven rooms for Dr. Emmett. Leads to the Mirrored Timecharm.", "charm:mirror"],
+    ["okron", "Ward against the fireball", "Collect glyphs for Sorcerer Okron and cast them."],
+    ["cat4", "Montezuma's Fourth", "On the roof of Plumber Joe's building.", "cat"],
+    ["kat", "Cleanup the Infested House", "Fill Kat's Vermin Bin. Gives Disinfestor Gloves."],
+    ["kloon", "Hacking for dummies", "Hack the terminals for Unhinged Kloon."],
+    ["gunther", "Gunther's Race", "Complete the Rift Race. Gives Gunther's Sneakers."],
+  ]],
+  ["Dreadfarm", [
+    ["cruxart", "Craft the Crux Artifact", "Kill Volts and craft Volt Cruxes."],
+    ["boatwood", "Reed's Boat: Replacement Wood", "Give Reed 64 Wilted Berberis."],
+    ["cat5", "Montezuma's Fifth", "Behind a weak wall (blow it up with a Horsezooka).", "cat"],
+    ["eye3", "Eye: The Baba Yaga", "Porhtal's third eye.", "eye"],
+    ["shania", "Harvest for Shania", "Craft and wear Chicken Leggs. Leads to the Chicken N Egg Timecharm.", "charm:chicken"],
+  ]],
+  ["Village Plaza", [
+    ["cruxrelic", "Craft the Crux Relic", "Kill Scribes and craft Scribe Cruxes."],
+    ["barry", "Barry, Premier Leader of SkyBlock", "Deal with the protestors. Leads to the SkyBlock Citizen Timecharm.", "charm:citizen"],
+    ["shenauc", "Shen Auctions", "Bid on an item in Barrier Street."],
+    ["boatcarrot", "Reed's Boat: Tasty Provisions", "Give Reed 128 Half-Eaten Carrots."],
+    ["nick", "Cowboy Nick's Rabbits", "Craft 7 Nearly-Whole Carrots."],
+    ["cat6", "Montezuma's Sixth", "Book in a Book, in Marcia's Flower House.", "cat"],
+    ["cat7", "Montezuma's Seventh", "Floating island next to Déjà Vu Alley.", "cat"],
+    ["murder1", "Reverse-Murder Investigation", "Help Detective Amog stop Ramero's murder."],
+    ["eye4", "Eye: The Bankster", "Porhtal's fourth eye.", "eye"],
+    ["seraphine", "Seraphine's Horrible Face", "Get the Anti-Morph Potion."],
+    ["seymour", "Fancy Sneakers", "Buy the Exceedingly Comfy Sneakers from Seymour."],
+  ]],
+  ["Living Cave", [
+    ["cruxheir", "Craft the Crux Heirloom", "Kill Frozilles and craft Frosty Cruxes."],
+    ["boatanchor", "Reed's Boat: Living Anchor", "Craft and give a Living Metal Anchor."],
+    ["recpick", "Craft Self-Recursive Pickaxe", "From Nullified Metal (Autonulls)."],
+    ["suit", "Max out your suit", "Defeat Autocaps, Autochests, Autopants and Autoboots."],
+    ["livingcharm", "Craft the Living Timecharm", "Frosty Cruxes and Living Metal.", "charm:living"],
+    ["heart", "Obtain a Living Metal Heart", "Use the Frozen Water Pungi on the Living Metal Snakes."],
+    ["cat8", "Montezuma's Eighth", "Under a breakable snow block in the Living Stillness.", "cat"],
+  ]],
+  ["Colosseum", [
+    ["boatbacte", "Reed's Boat: Bacte Fragments", "Give Reed 8 Bacte Fragments."],
+    ["bacte", "Defeat Bacte", "Leads to the Globulate Timecharm.", "charm:glob|slime"],
+    ["eye5", "Eye: The Gooey", "Porhtal's fifth eye.", "eye"],
+  ]],
+  ["Stillgore Château", [
+    ["cruxchrono", "Craft the Crux Chronomicon", "Kill Splatters and craft Splatter Cruxes."],
+    ["cat9", "Montezuma's Ninth", "Second floor of the house next to Deer.", "cat"],
+    ["eye6", "Eye: The Prince", "Porhtal's sixth eye.", "eye"],
+    ["melon", "Obtain Healing Melon", "Craft one from Vampiric Melons.", "vamp"],
+  ]],
+  ["The Mountaintop", [
+    ["starstone", "Craft the Celestial Starstone", "Kill Puffs and craft Puff Cruxes."],
+    ["eye7", "Eye: The Seventh Sin", "Porhtal's seventh eye.", "eye"],
+    ["shen", "The Richest Man in the Multiverse", "Walk of Fame and the Cerebral Citadel for Shen. Leads to a timecharm.", "charm:celest|star|wizard"],
+    ["eleanor", "Eleanor", "Prove your identity to Eleanors I, V, VII, IX and X. Leads to a timecharm.", "charm:vamp"],
+    ["breach", "Close the Breach", "With enough Rift Time, close the breach to finish the Rift story."],
+  ]],
+  ["Other", [
+    ["timite", "Unlock Timite Collection", ""],
+    ["wizardman", "Wizardman Trials", "Complete the trials in the Wizardman Bureau. Gives Wizardman Armor."],
+    ["murder2", "Second Reverse-Murder", "Stop Ramero's murder by killing your past self."],
+    ["murder3", "Third Reverse-Murder", "Steal Detective Amog's Wallet."],
+  ]],
+];
+function riftQuestsHTML(st){
+  const r = (st.raw || {}).rift || {};
+  const eyes = (dig(r, "wither_cage.killed_eyes") || []).length, cats = (dig(r, "dead_cats.found_cats") || []).length;
+  const charms = (dig(r, "gallery.secured_trophies") || []).map(t => String(t.type || t).toLowerCase());
+  const vamp = st.slayers.find(s => s.id === "vampire");
+  const manual = store.get("riftQuests", {});
+  const auto = a => {
+    if (!a) return null;
+    if (a === "eye") return eyes >= 7 ? "all 7 eyes calmed" : null;
+    if (a === "cat") return cats >= 9 ? "all 9 fragments found" : null;
+    if (a === "cloak") return dig(r, "enigma.bought_cloak") ? "cloak bought" : null;
+    if (a === "vamp") return vamp?.level >= 1 ? "Riftstalker slayer started" : null;
+    if (a.startsWith("charm:")) return charms.some(c => new RegExp(a.slice(6)).test(c)) ? "timecharm secured" : null;
+    return null;
+  };
+  let all = 0, done = 0;
+  const areas = RIFT_QUESTS.map(([area, qs]) => {
+    const rows = qs.map(([id, name, how, a]) => { const why = auto(a), ok = !!why || !!manual[id]; all++; if (ok) done++; return {id, name, how, a, why, ok}; });
+    return {area, rows, done:rows.filter(x => x.ok).length};
+  });
+  const hint = a => a === "eye" ? `<span class="muted"> · ${eyes}/7 eyes so far</span>` : a === "cat" ? `<span class="muted"> · ${cats}/9 fragments so far</span>` : "";
+  return `<div class="grid compact">
+      ${statCard("Rift Guide quests", `${done}/${all}`, "done", pct(done, all))}
+      ${statCard("Porhtal's eyes", `${eyes}/7`, "calmed (fast travel)", pct(eyes, 7))}
+      ${statCard("Montezuma fragments", `${cats}/9`, "found", pct(cats, 9))}
+      ${statCard("Areas complete", `${areas.filter(a => a.done === a.rows.length).length}/${areas.length}`, "", null)}
+    </div>
+    <div class="toolbar"><label class="chk"><input type="checkbox" id="rqHide" ${store.get("rqHide", false) ? "checked" : ""}> Hide finished</label>
+      <span class="muted small">Ticks marked <b>auto</b> come from your profile (eyes, Montezuma fragments, timecharms, Enigma's cloak). Tick the rest yourself as you finish them; it's saved in this browser. Quest list from the wiki's Rift Guide page.</span></div>
+    <div class="cols2">${areas.map(g => `<div class="card riftarea"><h3 style="margin:0 0 6px">${esc(g.area)} <span class="muted small">${g.done}/${g.rows.length}</span></h3>${bar(pct(g.done, g.rows.length))}
+      <table class="small" style="margin-top:6px"><tbody>${g.rows.map(q => `<tr data-done="${q.ok ? 1 : 0}"><td style="width:26px">${q.why ? '<span class="good" title="From your profile">✓</span>' : `<input type="checkbox" class="rqChk" data-q="${q.id}" ${q.ok ? "checked" : ""}>`}</td>
+        <td${q.ok ? ' style="opacity:.6"' : ""}><b>${esc(q.name)}</b>${q.why ? ` <span class="pill">auto: ${esc(q.why)}</span>` : hint(q.a)}${q.how ? `<div class="muted">${esc(q.how)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div>`).join("")}</div>`;
+}
+document.addEventListener("change", e => {
+  const c = e.target.closest(".rqChk");
+  if (c){ const m = store.get("riftQuests", {}); if (c.checked) m[c.dataset.q] = 1; else delete m[c.dataset.q]; store.set("riftQuests", m); render(); return; }
+  if (e.target.id === "rqHide"){ store.set("rqHide", e.target.checked); applyRqHide(); }
+});
+function applyRqHide(){ const h = store.get("rqHide", false); document.querySelectorAll(".riftarea tr[data-done]").forEach(tr => tr.hidden = h && tr.dataset.done === "1"); }
+function viewRift(st){
+  setTimeout(applyRqHide, 0);
+  return subTabs("rift", [{id:"overview", label:"Overview", html:riftOverviewHTML(st)}, {id:"quests", label:"📜 Quests", html:riftQuestsHTML(st)}]);
 }
 
 // ---------- Account upgrades: permanent consumables, minion slots, bag, abiphone… ----------
