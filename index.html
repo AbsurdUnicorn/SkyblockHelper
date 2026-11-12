@@ -2390,7 +2390,7 @@ function viewPets(st){
       ${statCard("Max level", D.pets.filter(p => p.level >= p.max).length, `of ${D.pets.length} pets`, null)}
       ${statCard("Active pet", active ? esc(petName(active.type)) : "—", active ? `${prettyKey(active.tier)} · level ${active.level}` : "", null)}
     </div>
-    ${subTabs("pets", [{id:"mine", label:"My pets", count:D.pets.length, html:mine}, {id:"score", label:"Pet Score", html:score}, {id:"missing", label:"Missing pets", count:D.missing.length, html:miss}])}`;
+    ${subTabs("pets", [{id:"mine", label:"My pets", count:D.pets.length, html:mine}, {id:"score", label:"Pet Score", html:score}, {id:"missing", label:"Missing pets", count:D.missing.length, html:miss}, {id:"flips", label:"💰 Levelling flips", html:needMarket() ? petFlipsHTML(st) : '<div class="muted">Loading prices…</div>'}])}`;
 }
 
 // ---------- Heart of the Mountain (shown in Skills → Mining) ----------
@@ -2553,6 +2553,7 @@ async function fillMining(){
     ${subTabs("mining", [
       {id:"level", label:"Level HotM", html:level},
       {id:"money", label:"💰 Money while mining", html:money},
+      {id:"forge", label:"🔨 Forge profits", html:forgeHTML(st)},
       {id:"rare", label:"🐛 Scatha & rare mobs", html:rareMobsHTML(st, "MINING")},
       {id:"shards", label:"Mining shards", html:goalHTML(S, an, "mining")},
     ])}`;
@@ -2560,6 +2561,174 @@ async function fillMining(){
     $("#hotmArea")?.addEventListener("change", e => { store.set("hotmArea", e.target.value); fillMining(); });
     limitRows(out);
   } catch(e){ console.error(e); out.innerHTML = `<div class="msg err">Couldn't load mining data: ${esc(e.message)}</div>`; }
+}
+
+// Forge recipes from the NEU repo (items/*.json, type "forge"): [output, count, duration seconds, [[input, amount]]]
+const FORGE_RECIPES = [["AMBER_MATERIAL",1,21600,[["GOLDEN_PLATE",1],["FINE_AMBER_GEM",12]]],["AMBER_NECKLACE",1,86400,[["GLOSSY_GEMSTONE",32],["FLAWLESS_AMBER_GEM",2]]],["AMBER_POLISHED_DRILL_ENGINE",1,30,[["DRILL_ENGINE",5],["PERFECT_AMBER_GEM",5],["PRECURSOR_APPARATUS",16],["SAPPHIRE_POLISHED_DRILL_ENGINE",1],["PLASMA",32]]],["AMETHYST_GAUNTLET",1,86400,[["GLOSSY_GEMSTONE",32],["FLAWLESS_AMETHYST_GEM",2]]],["AMMONITE;4",1,259200,[["HELIX",1],["SKYBLOCK_COIN",300000]]],["ANKYLOSAURUS;4",1,604800,[["FLAWLESS_OPAL_GEM",1],["CLUBBED_FOSSIL",1]]],["BASE_CAMP_TRAVEL_SCROLL",1,36000,[["SKYBLOCK_COIN",500000],["FLAWLESS_ONYX_GEM",1],["ENCHANTED_ENDER_PEARL",16]]],["BEACON_2",1,72000,[["REFINED_MITHRIL",5],["BEACON_1",1]]],["BEACON_3",1,108000,[["REFINED_MITHRIL",10],["BEACON_2",1]]],["BEACON_4",1,144000,[["REFINED_MITHRIL",20],["BEACON_3",1],["PLASMA",1]]],["BEACON_5",1,180000,[["BEACON_4",1],["REFINED_MITHRIL",40],["PLASMA",5]]],["BEJEWELED_COLLAR",1,7200,[["BEJEWELED_HANDLE",1],["REFINED_MITHRIL",4]]],["BEJEWELED_HANDLE",1,30,[["GLACITE_JEWEL",3]]],["CRYSTAL_HOLLOWS_TRAVEL_SCROLL",1,36000,[["FLAWED_RUBY_GEM",48],["SKYBLOCK_COIN",50000],["ENCHANTED_ENDER_PEARL",16],["FINE_RUBY_GEM",80]]],["DIAMONITE",1,21600,[["REFINED_DIAMOND",3]]],["DIVAN_BOOTS",1,86400,[["GEMSTONE_MIXTURE",10],["FLAWLESS_RUBY_GEM",1],["DIVAN_FRAGMENT",4]]],["DIVAN_CHESTPLATE",1,86400,[["GEMSTONE_MIXTURE",10],["FLAWLESS_RUBY_GEM",1],["DIVAN_FRAGMENT",8]]],["DIVAN_DRILL",1,30,[["TITANIUM_DRILL_4",1],["SKYBLOCK_COIN",50000000],["DIVAN_ALLOY",1]]],["DIVAN_HELMET",1,86400,[["FLAWLESS_RUBY_GEM",1],["GEMSTONE_MIXTURE",10],["DIVAN_FRAGMENT",5]]],["DIVAN_LEGGINGS",1,86400,[["DIVAN_FRAGMENT",7],["FLAWLESS_RUBY_GEM",1],["GEMSTONE_MIXTURE",10]]],["DIVAN_PENDANT",1,604800,[["PERFECT_PLATE",1],["DIVAN_FRAGMENT",10],["SHATTERED_PENDANT",1]]],["DIVAN_POWDER_COATING",1,129600,[["REFINED_MINERAL",32],["GLOSSY_GEMSTONE",32],["ENCHANTED_GOLD_BLOCK",16],["DIVAN_FRAGMENT",5]]],["DRILL_ENGINE",1,108000,[["ENCHANTED_IRON_BLOCK",1],["ENCHANTED_REDSTONE_BLOCK",3],["TREASURITE",10],["GOLDEN_PLATE",1]]],["DWARVEN_HANDWARMERS",1,14400,[["FLAWLESS_JADE_GEM",1],["UMBER_PLATE",1],["FLAWLESS_AMBER_GEM",1],["TUNGSTEN_PLATE",1]]],["DWARVEN_METAL",1,86400,[["REFINED_TUNGSTEN",4],["REFINED_UMBER",4],["GLACITE_AMALGAMATION",4]]],["FORGE_TRAVEL_SCROLL",1,18000,[["SKYBLOCK_COIN",25000],["ENCHANTED_ENDER_PEARL",16],["MITHRIL_ORE",48],["TITANIUM_ORE",80]]],["FRIGID_HUSK",1,21600,[["FLAWLESS_ONYX_GEM",1],["GLACITE_AMALGAMATION",4]]],["FUEL_TANK",1,36000,[["ENCHANTED_COAL_BLOCK",2]]],["GEMSTONE_CHAMBER",1,14400,[["WORM_MEMBRANE",100],["GEMSTONE_MIXTURE",1],["SKYBLOCK_COIN",25000]]],["GEMSTONE_DRILL_1",1,14400,[["DRILL_ENGINE",1],["FUEL_TANK",1],["FINE_RUBY_GEM",6]]],["GEMSTONE_DRILL_2",1,30,[["GEMSTONE_DRILL_1",1],["GEMSTONE_MIXTURE",3]]],["GEMSTONE_DRILL_3",1,30,[["FLAWLESS_TOPAZ_GEM",1],["GEMSTONE_MIXTURE",3],["GEMSTONE_DRILL_2",1],["MAGMA_CORE",8]]],["GEMSTONE_DRILL_4",1,30,[["TREASURITE",100],["FLAWLESS_JASPER_GEM",1],["GEMSTONE_DRILL_3",1],["MAGMA_CORE",16]]],["GEMSTONE_FUEL_TANK",1,30,[["GEMSTONE_MIXTURE",10],["TITANIUM_FUEL_TANK",1],["PRECURSOR_APPARATUS",4]]],["GEMSTONE_MIXTURE",1,14400,[["FINE_JADE_GEM",4],["SLUDGE_JUICE",320],["FINE_AMBER_GEM",4],["FINE_SAPPHIRE_GEM",4],["FINE_AMETHYST_GEM",4]]],["GLACITE_AMALGAMATION",1,14400,[["ENCHANTED_GLACITE",256],["FINE_PERIDOT_GEM",4],["FINE_AQUAMARINE_GEM",4],["FINE_CITRINE_GEM",4],["FINE_ONYX_GEM",4]]],["GLACITE_CHISEL",1,30,[["REINFORCED_CHISEL",1],["BEJEWELED_HANDLE",1],["GLACITE_AMALGAMATION",8],["MITHRIL_PLATE",1]]],["GLACITE_LANTERN",1,43200,[["TITANIUM_LANTERN",1],["GLACITE_AMALGAMATION",4],["ENCHANTED_EMERALD_BLOCK",2]]],["GLEAMING_CRYSTAL",1,21600,[["GLOSSY_GEMSTONE",32],["REFINED_MITHRIL",1],["REFINED_DIAMOND",2]]],["GOBLIN;4",1,604800,[["FLAWLESS_AMBER_GEM",1],["UGLY_FOSSIL",1]]],["GOBLIN_OMELETTE",1,64800,[["GOBLIN_EGG",96]]],["GOBLIN_OMELETTE_BLUE_CHEESE",1,64800,[["GOBLIN_OMELETTE",1],["FLAWLESS_SAPPHIRE_GEM",1],["GOBLIN_EGG_BLUE",96]]],["GOBLIN_OMELETTE_PESTO",1,64800,[["FLAWLESS_JADE_GEM",1],["GOBLIN_EGG_GREEN",96],["GOBLIN_OMELETTE",1]]],["GOBLIN_OMELETTE_SPICY",1,64800,[["FLAWLESS_RUBY_GEM",1],["GOBLIN_OMELETTE",1],["GOBLIN_EGG_RED",96]]],["GOBLIN_OMELETTE_SUNNY_SIDE",1,64800,[["GOBLIN_EGG_YELLOW",96],["FLAWLESS_TOPAZ_GEM",1],["GOBLIN_OMELETTE",1]]],["GOLDEN_PLATE",1,21600,[["ENCHANTED_GOLD_BLOCK",2],["REFINED_DIAMOND",1],["GLACITE_JEWEL",5]]],["HOT_STUFF",1,21600,[["FLAWLESS_TOPAZ_GEM",1],["ENCHANTED_HARD_STONE",128]]],["JADE_BELT",1,86400,[["GLOSSY_GEMSTONE",32],["FLAWLESS_JADE_GEM",2]]],["MAMMOTH;4",1,604800,[["TUSK_FOSSIL",1],["FLAWLESS_ONYX_GEM",1]]],["MITHRIL_BELT",1,3600,[["ENCHANTED_MITHRIL",3]]],["MITHRIL_CLOAK",1,3600,[["ENCHANTED_MITHRIL",3]]],["MITHRIL_DRILL_1",1,14400,[["REFINED_MITHRIL",3],["DRILL_ENGINE",1],["FUEL_TANK",1]]],["MITHRIL_DRILL_2",1,30,[["GOLDEN_PLATE",1],["MITHRIL_DRILL_1",1],["MITHRIL_PLATE",1]]],["MITHRIL_DRILL_ENGINE",1,86400,[["MITHRIL_PLATE",1],["DRILL_ENGINE",2]]],["MITHRIL_FUEL_TANK",1,86400,[["REFINED_DIAMOND",5],["REFINED_MITHRIL",10],["FUEL_TANK",5]]],["MITHRIL_GAUNTLET",1,3600,[["ENCHANTED_MITHRIL",3]]],["MITHRIL_LANTERN",1,1800,[["LANTERN",1],["REFINED_MITHRIL",1],["ENCHANTED_EMERALD",16]]],["MITHRIL_NECKLACE",1,3600,[["ENCHANTED_MITHRIL",3]]],["MITHRIL_PLATE",1,64800,[["GOLDEN_PLATE",1],["REFINED_TITANIUM",1],["REFINED_MITHRIL",5],["ENCHANTED_IRON_BLOCK",1]]],["MOLE;4",1,259200,[["SKYBLOCK_COIN",300000],["CLAW_FOSSIL",1]]],["PENGUIN;4",1,604800,[["WEBBED_FOSSIL",1],["FLAWLESS_AQUAMARINE_GEM",1]]],["PERFECTLY_CUT_FUEL_TANK",1,30,[["GEMSTONE_FUEL_TANK",1],["PRECURSOR_APPARATUS",16],["GEMSTONE_MIXTURE",25],["PLASMA",32]]],["PERFECT_AMBER_GEM",1,72000,[["AMBER_CRYSTAL",1],["FLAWLESS_AMBER_GEM",5]]],["PERFECT_AMETHYST_GEM",1,72000,[["AMETHYST_CRYSTAL",1],["FLAWLESS_AMETHYST_GEM",5]]],["PERFECT_AQUAMARINE_GEM",1,72000,[["AQUAMARINE_CRYSTAL",1],["FLAWLESS_AQUAMARINE_GEM",5]]],["PERFECT_CHISEL",1,30,[["BEJEWELED_HANDLE",1],["GLACITE_CHISEL",1],["PERFECT_PLATE",1]]],["PERFECT_CITRINE_GEM",1,72000,[["FLAWLESS_CITRINE_GEM",5],["CITRINE_CRYSTAL",1]]],["PERFECT_JADE_GEM",1,72000,[["FLAWLESS_JADE_GEM",5],["JADE_CRYSTAL",1]]],["PERFECT_JASPER_GEM",1,72000,[["FLAWLESS_JASPER_GEM",5],["JASPER_CRYSTAL",1]]],["PERFECT_ONYX_GEM",1,72000,[["FLAWLESS_ONYX_GEM",5],["ONYX_CRYSTAL",1]]],["PERFECT_OPAL_GEM",1,72000,[["FLAWLESS_OPAL_GEM",5],["OPAL_CRYSTAL",1]]],["PERFECT_PERIDOT_GEM",1,72000,[["PERIDOT_CRYSTAL",1],["FLAWLESS_PERIDOT_GEM",5]]],["PERFECT_PLATE",1,1800,[["UMBER_PLATE",1],["TUNGSTEN_PLATE",1],["MITHRIL_PLATE",1]]],["PERFECT_RUBY_GEM",1,72000,[["RUBY_CRYSTAL",1],["FLAWLESS_RUBY_GEM",5]]],["PERFECT_SAPPHIRE_GEM",1,72000,[["FLAWLESS_SAPPHIRE_GEM",5],["SAPPHIRE_CRYSTAL",1]]],["PERFECT_TOPAZ_GEM",1,72000,[["FLAWLESS_TOPAZ_GEM",5],["TOPAZ_CRYSTAL",1]]],["PETRIFIED_STARFALL",1,21600,[["STARFALL",512]]],["POCKET_ICEBERG",1,21600,[["GLACITE_JEWEL",5]]],["POLISHED_TOPAZ_ROD",1,43200,[["BEJEWELED_HANDLE",3],["FLAWLESS_TOPAZ_GEM",2]]],["PORTABLE_CAMPFIRE",1,1800,[["REFINED_UMBER",1],["MATCH_STICKS",16]]],["POWDER_OF_ONE",1,3600,[["REFINED_MITHRIL",1],["REFINED_TITANIUM",1]]],["POWDER_OF_THE_FEW",1,3600,[["POWDER_OF_ONE",1],["GEMSTONE_MIXTURE",4],["REFINED_MINERAL",32]]],["POWDER_OF_THE_MANY",1,21600,[["POWDER_OF_THE_FEW",1],["GLACITE_AMALGAMATION",4],["GLOSSY_GEMSTONE",32]]],["POWER_CRYSTAL",1,7200,[["STARFALL",256]]],["POWER_RELIC",1,28800,[["POWER_ARTIFACT",1],["PERFECT_PLATE",1],["GLACITE_AMALGAMATION",32]]],["PRECURSOR_DRONE;4",1,259200,[["PRECURSOR_APPARATUS",1],["SKYBLOCK_COIN",300000]]],["PURE_MITHRIL",1,21600,[["REFINED_MITHRIL",2]]],["REFINED_DIAMOND",1,28800,[["ENCHANTED_DIAMOND_BLOCK",2]]],["REFINED_MITHRIL",1,21600,[["ENCHANTED_MITHRIL",160]]],["REFINED_TITANIUM",1,43200,[["ENCHANTED_TITANIUM",16]]],["REFINED_TUNGSTEN",1,3600,[["ENCHANTED_TUNGSTEN",160]]],["REFINED_UMBER",1,3600,[["ENCHANTED_UMBER",160]]],["REINFORCED_CHISEL",1,30,[["REFINED_TUNGSTEN",2],["BEJEWELED_HANDLE",1],["REFINED_UMBER",2],["CHISEL",1]]],["ROCK_GEMSTONE",1,21600,[["TREASURITE",64],["ENCHANTED_COBBLESTONE",128]]],["RUBY_POLISHED_DRILL_ENGINE",1,30,[["PERFECT_RUBY_GEM",1],["PRECURSOR_APPARATUS",4],["TITANIUM_DRILL_ENGINE",1],["DRILL_ENGINE",5]]],["SAPPHIRE_CLOAK",1,86400,[["FLAWLESS_SAPPHIRE_GEM",2],["GLOSSY_GEMSTONE",32]]],["SAPPHIRE_POLISHED_DRILL_ENGINE",1,30,[["PERFECT_SAPPHIRE_GEM",3],["DRILL_ENGINE",5],["RUBY_POLISHED_DRILL_ENGINE",1],["PLASMA",16],["PRECURSOR_APPARATUS",8]]],["SECRET_RAILROAD_PASS",1,30,[["CORLEONITE",8],["REFINED_MITHRIL",2],["FLAWLESS_RUBY_GEM",1]]],["SKELETON_KEY",1,1800,[["BEJEWELED_HANDLE",1],["PERFECT_PLATE",1]]],["SPINOSAURUS;4",1,604800,[["SPINE_FOSSIL",1],["FLAWLESS_AQUAMARINE_GEM",1]]],["STARFALL_SEASONING",1,64800,[["TREASURITE",16],["STARFALL",64]]],["TITANIUM_ARTIFACT",1,129600,[["REFINED_TITANIUM",12],["TITANIUM_RING",1]]],["TITANIUM_BELT",1,16200,[["REFINED_TITANIUM",1],["REFINED_MINERAL",16],["MITHRIL_BELT",1]]],["TITANIUM_CLOAK",1,16200,[["MITHRIL_CLOAK",1],["REFINED_TITANIUM",1],["REFINED_MINERAL",16]]],["TITANIUM_DRILL_1",1,14400,[["FUEL_TANK",1],["DRILL_ENGINE",1],["REFINED_MITHRIL",8],["REFINED_TITANIUM",8],["GOLDEN_PLATE",6]]],["TITANIUM_DRILL_2",1,30,[["MITHRIL_PLATE",5],["REFINED_TITANIUM",12],["REFINED_DIAMOND",10],["TITANIUM_DRILL_1",1]]],["TITANIUM_DRILL_3",1,30,[["REFINED_DIAMOND",20],["ENCHANTED_IRON_BLOCK",2],["PLASMA",20],["TITANIUM_DRILL_2",1],["REFINED_TITANIUM",16],["MITHRIL_PLATE",10]]],["TITANIUM_DRILL_4",1,30,[["GEMSTONE_MIXTURE",16],["FLAWLESS_RUBY_GEM",1],["MITHRIL_PLATE",10],["REFINED_TITANIUM",32],["CORLEONITE",30],["TITANIUM_DRILL_3",1],["REFINED_DIAMOND",5]]],["TITANIUM_DRILL_ENGINE",1,30,[["DRILL_ENGINE",2],["MITHRIL_DRILL_ENGINE",1],["REFINED_TITANIUM",8]]],["TITANIUM_FUEL_TANK",1,30,[["REFINED_DIAMOND",5],["REFINED_TITANIUM",10],["FUEL_TANK",5],["MITHRIL_FUEL_TANK",1]]],["TITANIUM_GAUNTLET",1,16200,[["REFINED_MINERAL",16],["MITHRIL_GAUNTLET",1],["REFINED_TITANIUM",1]]],["TITANIUM_LANTERN",1,14400,[["MITHRIL_LANTERN",1],["REFINED_TITANIUM",2],["ENCHANTED_EMERALD_BLOCK",1]]],["TITANIUM_NECKLACE",1,16200,[["REFINED_TITANIUM",1],["MITHRIL_NECKLACE",1],["REFINED_MINERAL",16]]],["TITANIUM_RELIC",1,259200,[["TITANIUM_ARTIFACT",1],["REFINED_TITANIUM",20]]],["TITANIUM_RING",1,72000,[["TITANIUM_TALISMAN",1],["REFINED_TITANIUM",6]]],["TITANIUM_TALISMAN",1,50400,[["REFINED_TITANIUM",2]]],["TITANIUM_TESSERACT",1,21600,[["ENCHANTED_LAPIS_LAZULI",16],["REFINED_TITANIUM",1]]],["TUNGSTEN_KEY",1,30,[["ENCHANTED_TUNGSTEN",192],["BEJEWELED_HANDLE",1]]],["TUNGSTEN_KEYCHAIN",1,64800,[["PERFECT_OPAL_GEM",1],["FUEL_TANK",5],["TUNGSTEN_PLATE",5]]],["TUNGSTEN_PLATE",1,10800,[["GLACITE_AMALGAMATION",1],["REFINED_TUNGSTEN",4]]],["TYRANNOSAURUS;4",1,604800,[["FOOTPRINT_FOSSIL",1],["FLAWLESS_ONYX_GEM",1]]],["UMBER_KEY",1,30,[["BEJEWELED_HANDLE",1],["ENCHANTED_UMBER",192]]],["UMBER_PLATE",1,10800,[["REFINED_UMBER",4],["GLACITE_AMALGAMATION",1]]],["WILL_O_WISP",1,86400,[["GLACITE_LANTERN",1],["CAGED_WISP",1],["PERFECT_PLATE",1],["EVERBURNING_FLAME",1],["ENCHANTED_EMERALD_BLOCK",8]]]];
+// ---------- shared market helpers for money-making sections ----------
+// sell = what you get selling now (Bazaar instant sell after 1.25% tax, or lowest BIN after ~2% AH fees)
+// buy  = what it costs now (Bazaar instant buy, or lowest BIN)
+function mkt(id){
+  const b = BZFULL?.m?.[id];
+  if (b) return {sell:b.bid * 0.9875, offer:b.ask * 0.9875, buy:b.ask, src:"Bazaar", vol:b.bidVol};
+  const bin = PRICES?.bin?.[id];
+  if (bin) return {sell:bin * 0.98, offer:bin * 0.98, buy:bin, src:"AH", vol:null};
+  const bz = PRICES?.bz?.[id];
+  return bz ? {sell:bz * 0.9875, offer:bz * 0.9875, buy:bz, src:"Bazaar", vol:null} : null;
+}
+// make sure both price sources are loaded, then re-render once
+function needMarket(){
+  if (BZFULL && PRICES) return true;
+  if (!needMarket.busy){ needMarket.busy = true; Promise.all([loadBazaarFull(false), loadPrices()]).then(() => render()).catch(() => {}).finally(() => needMarket.busy = false); }
+  return false;
+}
+let NAME_IDX = null;
+function idByName(name){
+  if (!NAME_IDX && RES?.items){ NAME_IDX = {}; for (const i of RES.items) NAME_IDX[stripMc(i.name).toLowerCase()] = i.id; }
+  return NAME_IDX?.[String(name).toLowerCase()] || null;
+}
+// value of a drop named like the wiki tables: "Legendary Scatha pet", "Judgement Core", "Flash I book"…
+function dropValue(name){
+  const pm = name.match(/^(?:(Common|Uncommon|Rare|Epic|Legendary|Mythic) )?(.+?) pet\b/i);
+  if (pm){
+    const type = pm[2].toUpperCase().replace(/[^A-Z]+/g, "_");
+    const ri = pm[1] ? PET_TIERS.indexOf(pm[1].toUpperCase()) : 4;
+    const p = petPrice(type, ri) || [4, 3, 2, 1, 0].map(i => petPrice(type, i)).find(Boolean);
+    return p ? p * 0.98 : null;
+  }
+  if (/^[\d,]+ coins$/.test(name)) return +name.replace(/\D/g, "");
+  const clean = name.replace(/\s*\(.*\)$/, "").replace(/ book$/, "");
+  const id = idByName(clean) || idByName(name);
+  return id ? mkt(id)?.sell ?? null : null;
+}
+// expected coins per kill from a list of [name, base, pet, mfOk] rare drops
+function dropEV(st, drops){
+  let ev = 0, priced = 0;
+  for (const [n, b, p, mf] of drops || []){ if (/per eye/.test(n)) continue; const v = dropValue(n); if (v){ ev += dropChance(st, b, p, mf !== false) * v; priced++; } }
+  return {ev, priced};
+}
+
+// ---------- Forge profit calculator (Mining & HotM) ----------
+function forgeHTML(st){
+  if (!needMarket()) return `<div class="muted">Loading Bazaar and auction prices…</div>`;
+  const me = st.raw || {}, mc = me.mining_core || {}, nodes = mc.nodes || dig(me, "skill_tree.nodes.mining") || {};
+  const qf = nodes.forge_time || 0, cut = Math.min(30, 10 + qf * 0.5 + Math.floor(qf * 0.05) * 10) / 100 * (qf ? 1 : 0);
+  const xp = mc.experience ?? dig(me, "skill_tree.experience.mining");
+  const tier = xp == null ? null : HOTM_XP.filter(t => xp >= t).length;
+  const slots = tier == null ? 2 : Math.max(0, Math.min(7, tier));
+  const sort = store.get("forgeSort", "hour"), sellMode = store.get("forgeSell", "instant"), hideReq = store.get("forgeOnlyMine", false);
+  const priceOf = (id, mode) => {
+    if (id === "SKYBLOCK_COIN") return 1;
+    const pm = id.match(/^([A-Z_]+);(\d)$/);
+    if (pm && PET_LIST.some(p => p[0] === pm[1])) { const p = petPrice(pm[1], +pm[2]); return p ? (mode === "buy" ? p : p * 0.98) : null; }
+    const m = mkt(id); if (!m) return null;
+    return mode === "buy" ? m.buy : sellMode === "offer" ? m.offer : m.sell;
+  };
+  const rows = [];
+  for (const [out, count, dur, inputs] of FORGE_RECIPES){
+    const sellEach = priceOf(out, "sell"); if (!sellEach) continue;
+    let cost = 0, missing = [];
+    for (const [id, n] of inputs){ const p = priceOf(id, "buy"); if (p == null) missing.push(id); else cost += p * n; }
+    if (missing.length) continue;
+    // NEU stores most durations in seconds, but a few drill parts as plain hours (30 = 30h)
+    const hours = (dur < 100 ? dur : dur / 3600) * (1 - cut);
+    const req = (RES?.byId?.[out.split(";")[0]]?.requirements || []).find(r => /HEART_OF_THE_MOUNTAIN/.test(r.type));
+    const profit = sellEach * count - cost;
+    rows.push({out, count, cost, sell:sellEach * count, profit, hours, perHr:profit / hours, roi:cost ? profit / cost : 0, inputs, req:req?.tier, vol:mkt(out)?.vol});
+  }
+  const usable = rows.filter(r => !hideReq || !r.req || (tier || 0) >= r.req);
+  const key = {hour:r => r.perHr, profit:r => r.profit, roi:r => r.roi}[sort] || (r => r.perHr);
+  usable.sort((a, b) => key(b) - key(a));
+  const good = usable.filter(r => r.profit > 0);
+  const dur = h => h >= 24 ? `${(h / 24).toFixed(h % 24 ? 1 : 0)}d` : h >= 1 ? `${h.toFixed(h % 1 ? 1 : 0)}h` : `${Math.round(h * 60)}m`;
+  const nm = id => { const pm = id.match(/^([A-Z_]+);(\d)$/); return pm ? `${prettyKey(PET_TIERS[+pm[2]])} ${petName(pm[1])} pet` : id === "SKYBLOCK_COIN" ? "coins" : nameOf(id); };
+  const best = good[0];
+  return `<div class="grid compact">
+      ${statCard("Best forge right now", best ? esc(nm(best.out)) : "—", best ? `+${fmt(best.profit)} per craft · ${fmt(best.perHr)}/hour per slot` : "nothing profitable", null)}
+      ${statCard("Your forge slots", slots, tier == null ? "HotM tier not found (assuming 2)" : `at HotM tier ${tier}`, null)}
+      ${statCard("Quick Forge", qf ? `Level ${qf}` : "—", qf ? `${Math.round(cut * 100)}% faster forging` : "no time reduction found", qf ? pct(qf, 21) : null)}
+      ${statCard(`Top ${slots} running nonstop`, fmt(good.slice(0, slots).reduce((a, r) => a + r.perHr * 24, 0)), "coins a day if you restart each one when it finishes", null)}
+    </div>
+    <div class="toolbar"><label class="chk">Sort by <select id="forgeSort">${[["hour", "Coins per hour"], ["profit", "Profit per craft"], ["roi", "Return on cost"]].map(([v, t]) => `<option value="${v}" ${v === sort ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label class="chk">Sell with <select id="forgeSell">${[["instant", "instant sell / lowest BIN"], ["offer", "sell offer"]].map(([v, t]) => `<option value="${v}" ${v === sellMode ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label class="chk"><input type="checkbox" id="forgeOnlyMine" ${hideReq ? "checked" : ""}> Only what my HotM tier can forge</label></div>
+    <div class="card"><table data-limit="15"><thead><tr><th>Forge</th><th>Inputs (bought now)</th><th>Time</th><th>Profit</th><th>Per hour</th><th>Return</th></tr></thead><tbody>
+    ${usable.map(r => `<tr${r.profit <= 0 ? ' style="opacity:.5"' : ""}><td><b>${r.count > 1 ? r.count + "× " : ""}${esc(nm(r.out))}</b>${r.req ? `<div class="muted small">${(tier || 0) >= r.req ? "" : "🔒 "}needs HotM ${r.req}</div>` : ""}${r.vol != null && r.vol < 1000 ? '<div class="small" style="color:var(--warn)">⚠ low volume</div>' : ""}</td>
+      <td class="small">${r.inputs.map(([id, n]) => `${fmt(n)}× ${esc(nm(id))}`).join(", ")}<div class="muted">cost ${fmt(r.cost)} → sells ${fmt(r.sell)}</div></td>
+      <td>${dur(r.hours)}</td><td class="${r.profit > 0 ? "good" : "bad"}"><b>${r.profit > 0 ? "+" : ""}${fmt(r.profit)}</b></td><td>${r.profit > 0 ? fmt(r.perHr) : "—"}</td><td class="small">${r.cost ? Math.round(r.roi * 100) + "%" : "—"}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No priced forge recipes.</td></tr>`}
+    </tbody></table></div>
+    <p class="muted small">${FORGE_RECIPES.length} forge recipes from the NEU repo, priced live: inputs at instant-buy / lowest BIN, output after Bazaar tax or ~2% AH fees. Times include your Quick Forge (${Math.round(cut * 100)}%). "Per hour" is per forge slot; long forges earn while you're offline, so profit per craft matters more if you only check in once a day. Recipes whose items have no price right now are left out.</p>`;
+}
+document.addEventListener("change", e => {
+  const id = e.target.id;
+  if (id === "forgeSort" || id === "forgeSell") { store.set(id, e.target.value); fillMining(); }
+  else if (id === "forgeOnlyMine") { store.set(id, e.target.checked); fillMining(); }
+});
+
+// ---------- per-skill money sections ----------
+// Farming: best way to sell each crop right now (NPC, raw on Bazaar, or as the enchanted version)
+const CROPS = [["WHEAT", null, 0], ["CARROT_ITEM", "ENCHANTED_CARROT", 160], ["POTATO_ITEM", "ENCHANTED_POTATO", 160], ["PUMPKIN", "ENCHANTED_PUMPKIN", 160],
+  ["MELON", "ENCHANTED_MELON", 160], ["SUGAR_CANE", "ENCHANTED_SUGAR", 160], ["CACTUS", "ENCHANTED_CACTUS_GREEN", 160], ["INK_SACK:3", "ENCHANTED_COCOA", 160],
+  ["NETHER_STALK", "ENCHANTED_NETHER_STALK", 160], ["RED_MUSHROOM", "ENCHANTED_RED_MUSHROOM", 160], ["BROWN_MUSHROOM", "ENCHANTED_BROWN_MUSHROOM", 160]];
+function farmingMoneyHTML(){
+  const rows = CROPS.map(([raw, ench, n]) => {
+    const npc = RES?.byId?.[raw]?.npc_sell_price || 0, r = mkt(raw)?.sell || 0, e = ench ? (mkt(ench)?.sell || 0) / n : 0;
+    const best = Math.max(npc, r, e);
+    return {raw, ench, npc, r, e, best, how:best === npc ? "NPC" : best === e ? `as ${nameOf(ench)}` : "raw on Bazaar"};
+  }).filter(x => x.best > 0).sort((a, b) => b.best - a.best);
+  return `<h3 class="ph">💰 Selling crops right now</h3>
+    <div class="card"><table><thead><tr><th>Crop</th><th>NPC</th><th>Bazaar raw</th><th>As enchanted</th><th>Best per 1,000</th></tr></thead><tbody>
+    ${rows.map(x => `<tr><td>${esc(nameOf(x.raw))}</td><td class="small">${x.npc ? x.npc.toFixed(1) : "—"}</td><td class="small">${x.r ? x.r.toFixed(1) : "—"}</td><td class="small">${x.e ? x.e.toFixed(1) : "—"}</td><td><b>${fmt(x.best * 1000)}</b><div class="muted small">${esc(x.how)}</div></td></tr>`).join("")}
+    </tbody></table></div>
+    <p class="muted small">Coins per crop item after Bazaar tax. Crops drop different amounts per block (melons and cocoa drop several), so multiply by what you actually harvest per hour. Other farming money: Garden visitor offers, pest drops, and selling Jacob's contest rewards.</p>`;
+}
+// Taming / Pets: buy a low-level pet, level it to 100, sell it
+function petFlipsHTML(st){
+  const rows = [];
+  for (const [type, rar] of PET_LIST) for (const ri of rar.split("").map(Number)){
+    const tier = PET_TIERS[ri], lo = PRICES?.bin?.[`PET-${type}-${tier}`], hi = PRICES?.bin?.[`PET-${type}-${tier}-100`];
+    if (!lo || !hi || /^(GOLDEN|JADE|ROSE)_DRAGON$/.test(type)) continue;
+    const off = PET_OFFSET[tier] ?? 0, xp = PET_LEVELS.slice(off, off + 99).reduce((a, b) => a + b, 0);
+    const profit = hi * 0.98 - lo;
+    if (profit > 0) rows.push({type, tier, lo, hi, profit, xp, perM:profit / (xp / 1e6)});
+  }
+  rows.sort((a, b) => b.perM - a.perM);
+  return `<h3 class="ph">💰 Pet levelling flips <span class="muted small">(lowest BIN)</span></h3>
+    <div class="card"><table data-limit="12"><thead><tr><th>Pet</th><th>Buy (low level)</th><th>Sell at 100</th><th>Profit</th><th>Per 1M pet XP</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td><span style="color:${PET_COLOR[r.tier] || "inherit"}">${esc(prettyKey(r.tier))}</span> ${esc(petName(r.type))}</td><td>${fmt(r.lo)}</td><td>${fmt(r.hi)}</td><td class="good">+${fmt(r.profit)}</td><td><b>${fmt(r.perM)}</b><div class="muted small">${fmt(r.xp)} XP to 100</div></td></tr>`).join("") || `<tr><td colspan="5" class="muted">No price data.</td></tr>`}
+    </tbody></table></div>
+    <p class="muted small">Buy the cheapest low-level copy, level it to 100 (EXP Share, Kat, pet XP items, or just playing with it) and sell it. Sorted by profit per million pet XP, because XP is the real cost. "Low level" is the cheapest listing of any level below 100, so check its level before buying.</p>`;
+}
+// Enchanting: experiment rewards worth selling
+const ENCHANT_ITEMS = [["TITANIC_EXP_BOTTLE", "Transcendent / Metaphysical experiments"], ["COLOSSAL_EXP_BOTTLE", "Experiments"], ["GRAND_EXP_BOTTLE", "Experiments"], ["METAPHYSICAL_SERUM", "Grand+ experiments (or eat it)"], ["EXPERIMENT_THE_FISH", "Rare experiment reward"], ["ENCHANTED_LAPIS_BLOCK", "Lapis for enchanting"]];
+function enchantingMoneyHTML(){
+  const rows = ENCHANT_ITEMS.map(([id, note]) => ({id, note, m:mkt(id)})).filter(x => x.m);
+  return rows.length ? `<h3 class="ph">💰 Experiment rewards worth selling</h3><div class="card"><table><tbody>
+    ${rows.map(x => `<tr><td>${esc(nameOf(x.id))}<div class="muted small">${esc(x.note)}</div></td><td>${fmt(x.m.sell)}</td><td class="muted small">${x.m.src}</td></tr>`).join("")}</tbody></table></div>
+    <p class="muted small">Daily experiments are free money: sell the bottles and book rewards you don't need.</p>` : "";
+}
+// Essence you're holding (Dungeons tab / Upgrades)
+const ESSENCES = ["WITHER", "UNDEAD", "DRAGON", "SPIDER", "ICE", "GOLD", "DIAMOND", "CRIMSON"];
+function essenceMoneyHTML(st){
+  const have = dig(st.raw || {}, "currencies.essence") || {};
+  const rows = ESSENCES.map(k => ({k, n:have[k]?.current || 0, m:mkt("ESSENCE_" + k)})).filter(x => x.m);
+  if (!rows.length) return "";
+  const total = rows.reduce((a, x) => a + x.n * x.m.sell, 0);
+  return `<div class="section"><h2>💰 Essence</h2><div class="card"><table><thead><tr><th>Essence</th><th>Price each</th><th>You have</th><th>Worth</th></tr></thead><tbody>
+    ${rows.sort((a, b) => b.n * b.m.sell - a.n * a.m.sell).map(x => `<tr><td>${esc(prettyKey(x.k))}</td><td>${fmt(x.m.sell)}</td><td>${fmt(x.n)}</td><td><b>${fmt(x.n * x.m.sell)}</b></td></tr>`).join("")}
+    </tbody></table></div><p class="muted small">Essence you aren't saving for upgrades can be sold on the Bazaar: about <b>${fmt(total)}</b> right now. Dungeon chests and slayers are the main sources.</p></div>`;
+}
+function skillMoneyHTML(st, id){
+  if (!needMarket()) return `<h3 class="ph">💰 Money</h3><div class="muted small">Loading prices…</div>`;
+  if (id === "FARMING") return farmingMoneyHTML();
+  if (id === "TAMING") return petFlipsHTML(st);
+  if (id === "ENCHANTING") return enchantingMoneyHTML();
+  if (id === "MINING") return `<p class="small">💰 Gemstone prices, mining drops and the forge profit calculator are in <a href="#" onclick="tab='mining';store.set('tab',tab);render();return false">Mining & HotM →</a></p>`;
+  if (id === "FORAGING") return `<p class="small">💰 Foraging money is in <a href="#" onclick="tab='foraging';store.set('tab',tab);render();return false">Foraging & HotF → Money while foraging</a></p>`;
+  if (id === "HUNTING") return `<p class="small">💰 Shard money making is in <a href="#" onclick="tab='shards';store.set('tab',tab);render();return false">Shards → 💰 Money making</a></p>`;
+  if (id === "COMBAT") return `<p class="small">💰 Expected coins per boss are on each boss page in <a href="#" onclick="tab='slayers';store.set('tab',tab);render();return false">Slayers</a>; the rare mob table below shows coins per kill.</p>`;
+  if (id === "FISHING") return `<p class="small">💰 The sea creature table below shows the expected coins per catch from rare drops, with your Magic Find.</p>`;
+  return "";
 }
 
 // ---------- Rift ----------
@@ -3233,7 +3402,9 @@ function slayerDropsHTML(st, s){
   const d = SLAYER_DROPS[s.id];
   if (!d) return `<h3 class="ph">🎲 Rare drops</h3><p class="muted small">The wiki's ${esc(s.name)} page lists drop weights rather than chances, so they can't be converted to odds yet.</p>`;
   const [tier, list] = d, tries = (s.kills || [])[tier - 1] || 0;
+  const ev = needMarket() ? dropEV(st, list) : null;
   return `<h3 class="ph">🎲 Rare drops <span class="muted small">(Tier ${tier}, rarest first)</span></h3>${dropControls(st)}
+    ${ev ? `<p class="small">💰 Rare drops are worth about <b>${fmt(ev.ev)} coins per Tier ${tier} boss</b> on average at today's prices (${ev.priced} of ${list.length} drops have a price). Add the guaranteed drops and subtract the quest cost to get your profit.</p>` : ""}
     <div class="card"><div class="small" style="columns:2 320px">${list.map(([n, b, p, mf]) => dropLine(st, n, b, {pet:p, mf, tries})).join("")}</div>
     <p class="muted small" style="margin:6px 0 0">Chances from the wiki for Tier ${tier}. "By your kills" uses your ${fmt(tries)} Tier ${tier} kills. Slayer RNG Meter progress isn't counted, so real odds are better. Some drops also need a minimum slayer level.</p></div>`;
 }
@@ -3255,11 +3426,11 @@ function rareMobsHTML(st, skill){
   return `<h3 class="ph">${RARE_TITLE[skill]} <span class="muted small">(${done}/${rows.length} bestiary maxed)</span></h3>
     ${has ? "" : `<p class="muted small">No bestiary kills found in your profile data${st.demo ? "" : " (the Bestiary API may be off)"}, so kills show 0.</p>`}
     ${rows.some(r => r.drops) ? dropControls(st) : ""}
-    <div class="card"><table data-limit="${skill === "FARMING" ? 6 : 8}"><thead><tr><th>Mob</th><th>Kills</th><th style="width:22%">Bestiary</th><th>Pet</th>${rows.some(r => r.drops) ? "<th>Rare drops (wiki) → with your MF / Pet Luck</th>" : ""}</tr></thead><tbody>
+    <div class="card"><table data-limit="${skill === "FARMING" ? 6 : 8}"><thead><tr><th>Mob</th><th>Kills</th><th style="width:22%">Bestiary</th><th>Pet</th>${rows.some(r => r.drops) ? "<th>Rare drops (wiki) → with your MF / Pet Luck</th><th>💰 Per kill</th>" : ""}</tr></thead><tbody>
     ${rows.map(r => `<tr${r.tier >= r.max ? ' style="opacity:.7"' : ""}><td><b>${esc(r.name)}</b><div class="muted small">${esc(r.note)}</div></td>
       <td><b>${fmt(r.kills)}</b>${r.shared ? `<div class="muted small">${fmt(r.famKills)} in shared entry</div>` : ""}</td>
       <td class="small">Tier ${r.tier}/${r.max}${r.tier >= r.max ? ' <span class="good">maxed</span>' : `${bar(pct(r.famKills - r.prev, r.nextAt - r.prev))}<span class="muted">${fmt(r.nextAt - r.famKills)} more to tier ${r.tier + 1}</span>`}</td>
-      <td class="small">${!r.pet ? '<span class="muted">—</span>' : r.owned ? `<span class="good">✓ ${esc(r.owned.tier.toLowerCase())}</span>${r.owned.tier !== "LEGENDARY" ? '<div class="muted">a Legendary one can still drop</div>' : ""}` : `<span class="muted">not owned</span>`}<div class="muted">${r.pet ? esc(nameOf(r.pet).replace(/_/g, " ")) : ""}</div></td>${rows.some(x => x.drops) ? `<td class="small">${r.drops ? r.drops.map(([n, b, p, mf]) => dropLine(st, n, b, {pet:p, mf, tries:/per eye/.test(n) ? null : r.kills})).join("") : '<span class="muted">—</span>'}</td>` : ""}</tr>`).join("")}
+      <td class="small">${!r.pet ? '<span class="muted">—</span>' : r.owned ? `<span class="good">✓ ${esc(r.owned.tier.toLowerCase())}</span>${r.owned.tier !== "LEGENDARY" ? '<div class="muted">a Legendary one can still drop</div>' : ""}` : `<span class="muted">not owned</span>`}<div class="muted">${r.pet ? esc(nameOf(r.pet).replace(/_/g, " ")) : ""}</div></td>${rows.some(x => x.drops) ? `<td class="small">${r.drops ? r.drops.map(([n, b, p, mf]) => dropLine(st, n, b, {pet:p, mf, tries:/per eye/.test(n) ? null : r.kills})).join("") : '<span class="muted">—</span>'}</td><td class="small">${(() => { if (!r.drops) return '<span class="muted">—</span>'; if (!needMarket()) return "…"; const e = dropEV(st, r.drops); return e.priced ? `<b>${fmt(e.ev)}</b><div class="muted">from ${e.priced} priced drop${e.priced > 1 ? "s" : ""}</div>` : '<span class="muted">no prices</span>'; })()}</td>` : ""}</tr>`).join("")}
     </tbody></table></div>`;
 }
 
@@ -3313,6 +3484,7 @@ function skillPane(st, s){
     </div>
     ${colls.length ? `<h3 class="ph">${esc(link.coll)} collections <span class="muted small">(closest to next tier first)</span></h3>
       <div class="card"><table data-limit="8"><tbody>${colls.map(c => `<tr><td>${esc(c.name)}</td><td>${c.tier}/${c.maxTiers}</td><td style="width:40%">${c.tier >= c.maxTiers ? '<span class="muted">Maxed</span>' : bar(c.next ? pct(c.amount - c.prev, c.next - c.prev) : 100)}</td><td class="muted small">${fmt(c.amount)}${c.next ? ` / ${fmt(c.next)}` : ""}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${skillMoneyHTML(st, s.id)}
     ${skillExtraHTML(st, s.id)}
     ${rareMobsHTML(st, s.id)}`;
 }
@@ -3382,7 +3554,8 @@ function viewCombat(st){
     <tr><td>Completions</td>${floors.map(([,v]) => `<td>${fmt(v)}</td>`).join("")}</tr>
     ${mm.length ? `<tr><td>Master mode</td>${floors.map(([k]) => `<td>${st.mmFloors[k] ? fmt(st.mmFloors[k]) : "—"}</td>`).join("")}</tr>` : ""}
   </tbody></table>${floors.length ? "" : '<div class="muted">No dungeon runs recorded.</div>'}</div></div>
-  ${kuudraHTML(st)}`;
+  ${kuudraHTML(st)}
+  ${needMarket() ? essenceMoneyHTML(st) : ""}`;
 }
 
 function viewHistory(){
