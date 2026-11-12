@@ -2278,6 +2278,7 @@ async function fillSlayers(){
       </div>
       <p class="small">📍 <b>${esc(info.area)}</b>. ${esc(info.tip)}</p>
       <h3 class="ph">🔮 Shards</h3><div class="card">${slayerShardTable(S, an, mine, true)}</div>
+      ${slayerDropsHTML(st, s)}
       <h3 class="ph">🎒 Items you unlock <span class="muted small">(⭐ = guide pick, from Hypixel's item list)</span></h3>
       <div class="card">${slayerGearHTML(st, g, s, {limit:12})}</div>`; };
 
@@ -3166,7 +3167,7 @@ const oneIn = p => p > 0 ? `1 in ${fmt(Math.round(1 / p))}` : "—";
 function dropLine(st, name, base, opts = {}){
   const eff = dropChance(st, base, opts.pet, opts.mf !== false);
   const by = opts.tries != null ? 1 - Math.pow(1 - eff, opts.tries) : null;
-  return `<div class="dropline"><b>${esc(name)}</b> <span class="muted">${pctTxt(base)}</span>${eff !== base ? ` → <span class="good">${pctTxt(eff)}</span>` : opts.mf === false ? ' <span class="muted">(no MF)</span>' : base >= 0.05 ? ' <span class="muted">(≥5%, no MF)</span>' : ""}
+  return `<div class="dropline"><b>${esc(name)}</b> <span class="muted">${pctTxt(base)}</span>${eff !== base ? ` → <span class="good">${pctTxt(eff)}</span>` : opts.mf === false ? ' <span class="muted">(not boosted by MF)</span>' : base >= 0.05 ? ' <span class="muted">(≥5%, no MF)</span>' : ""}
     <span class="muted">· ${oneIn(eff)}</span>${by != null && opts.tries > 0 ? ` · <span title="Chance of at least one drop in your ${fmt(opts.tries)} kills">${pctTxt(by)} by your kills</span>` : ""}</div>`;
 }
 // the shared Magic Find / Pet Luck inputs (same values everywhere, saved in this browser)
@@ -3189,6 +3190,54 @@ const RARE_DROPS = {
   "Yeti":[["Baby Yeti pet", 0.02, true], ["True Ice", 0.01], ["Iceberg Dye", 1 / 50000]],
 };
 
+// More wiki drop tables (fetched 2026-11-12): [drop, base chance, is a pet, Magic Find applies (default yes)]
+Object.assign(RARE_DROPS, {
+  // fishing
+  "Lord Jawbus":[["Lord Jawbus Shard", 0.02], ["Radioactive Vial", 0.005], ["Bobbin' Scriptures", 0.01], ["Carmine Dye", 1 / 50000]],
+  "Thunder":[["Flash I book", 0.015], ["Carmine Dye", 1 / 50000]],
+  "Ragnarok":[["Chain of the End Times", 0.01], ["Brimstone Handle", 0.005], ["Burnt Texts", 0.0025], ["Bobbin' Scriptures", 0.01], ["Carmine Dye", 1 / 50000]],
+  "Fiery Scuttler":[["Severed Pincer", 0.002], ["Scuttler Shell", 0.001], ["Carmine Dye", 1 / 50000]],
+  "Plhlegblast":[["Squid Boots", 0.01], ["Enchanted Ink Sac", 0.005], ["Bobbin' Scriptures", 0.01], ["Carmine Dye", 1 / 50000]],
+  "The Loch Emperor":[["Rare Flying Fish pet", 0.04, true], ["Epic Flying Fish pet", 0.02, true], ["Legendary Flying Fish pet", 0.005, true], ["Mangcore", 0.01], ["Aquamarine Dye", 1 / 50000]],
+  "Water Hydra":[["Aquamarine Dye", 1 / 50000]],
+  "Abyssal Miner":[["Piscary VI book", 0.02], ["Aquamarine Dye", 1 / 50000]],
+  "Reindrake":[["Bobbin' Scriptures", 0.01], ["Iceberg Dye", 1 / 50000]],
+  "Grim Reaper":[["Polished Pumpkin", 0.02], ["Shredded Line", 0.01], ["Deep Sea Orb", 0.01], ["Bobbin' Scriptures", 0.01], ["Midnight Dye", 1 / 50000]],
+  "Phantom Fisher":[["Spooky Hook", 0.01], ["Deep Sea Orb", 0.01], ["Midnight Dye", 1 / 50000]],
+  "Titanoboa":[["Titanoboa Shed", 0.002], ["Snake Eyes", 0.0011], ["Condensed Lily Pad", 0.01], ["Bobbin' Scriptures", 0.01], ["Aquamarine Dye", 1 / 50000]],
+  "Wiki Tiki":[["Tiki Mask", 0.001], ["Troubled Bubble", 0.002], ["Enchanted Clay Block", 0.01], ["Bobbin' Scriptures", 0.01], ["Aquamarine Dye", 1 / 50000]],
+  "Nessie":[["Mound of Seagrass", 0.02], ["Vibrant Coral", 0.005], ["Bobbin' Scriptures", 0.01], ["Aquamarine Dye", 1 / 50000]],
+  // combat
+  "Minos Inquisitor":[["Chimera I book", 0.01], ["Mythological Dye", 1 / 50000]],
+  "Minos Champion":[["Minos Relic", 0.0002], ["Mythological Dye", 1 / 250000]],
+  "King Minos":[["Crown of Greed", 0.02], ["Shimmering Wool", 0.002], ["Mythological Dye", 1 / 10000]],
+  "Manticore":[["Fateful Stinger", 0.005], ["Manti-core", 0.002], ["Mythological Dye", 1 / 10000]],
+  "Sphinx":[["Brain Food (Empyrean)", 0.005], ["Brain Food (Exalted)", 0.0025], ["Mythological Dye", 1 / 50000]],
+  "Arachne":[["Epic Tarantula pet", 0.02, true], ["Legendary Tarantula pet", 0.02, true]],
+  "Vanquisher":[["Cyclamen Dye", 0.000004]],
+  "Dragon":[["Legendary Ender Dragon pet (per eye)", 0.0001, true, false], ["Epic Ender Dragon pet (per eye)", 0.0005, true, false], ["Dragon Claw (per eye)", 0.02, false, false]],
+  // mining
+  "Diamond Goblin":[["Pure Mithril Gem", 0.01]],
+  "Ghost":[["Volta", 0.002], ["Sorrow", 0.0012], ["Plasma", 0.001], ["Ghostly Boots", 0.0001], ["1,000,000 coins", 0.0001]],
+  "Glacite Walker":[["Glacite Jewel", 0.005], ["Glacite armor piece", 0.005]],
+});
+// Slayer boss rare drops from the wiki: [tier the chances are for, drops]. Revenant's page only gives weights, not chances.
+const SLAYER_DROPS = {
+  spider:[5, [["Primordial Eye", 0.00014], ["Ensnared Snail", 0.00042], ["Digested Mosquito", 0.00071], ["Shriveled Wasp", 0.0014], ["Vial of Venom", 0.0014], ["Tarantula Talisman", 0.0021], ["Fly Swatter", 0.0021], ["Bane of Arthropods VI", 0.0035], ["Tarantula Catalyst", 0.0042], ["Darkness Within Rune", 0.0066], ["Paragon Shard", 0.005], ["Brick Red Dye", 0.000004]]],
+  wolf:[4, [["Overflux Capacitor", 0.0004], ["Grizzly Salmon", 0.0006], ["Red Claw Egg", 0.0012], ["Couture Rune I", 0.0024], ["Critical VI book", 0.0081], ["Furball", 0.0162], ["Paragon Shard", 0.0025], ["Celeste Dye", 0.000002]]],
+  enderman:[4, [["Ender Slayer VII (End Stone Idol)", 0.00014], ["Exceedingly Rare Ender Artifact Upgrade", 0.00028], ["Enchant Rune", 0.00046], ["Judgement Core", 0.00056], ["Void Conqueror skin", 0.0017], ["Handy Blood Chalice", 0.0018], ["Pocket Espresso Machine", 0.0039], ["Etherwarp Merger", 0.0042], ["Sinful Dice", 0.0046], ["Summoning Eye", 0.0056], ["End Rune", 0.0066], ["Hazmat Enderman", 0.0155], ["Smarty Pants book", 0.0176], ["Transmission Tuner", 0.0212], ["Paragon Shard", 0.0025], ["Byzantium Dye", 0.000002]]],
+  blaze:[4, [["Wilson's Engineering Plans", 0.0009], ["Subzero Inverter", 0.0009], ["Fiery Burst Rune I", 0.0021], ["High Class Archfiend Dice", 0.0026], ["Archfiend Dice", 0.0105], ["Smoldering VI book", 0.0132], ["Duplex", 0.0184], ["Paragon Shard", 0.0025], ["Flame Dye", 0.000002]]],
+  vampire:[5, [["McGrubber's Burger", 0.012], ["Unfanged Vampire Part", 0.012], ["The One (book bundle)", 0.018], ["Sangria Dye", 0.0001]]],
+};
+function slayerDropsHTML(st, s){
+  const d = SLAYER_DROPS[s.id];
+  if (!d) return `<h3 class="ph">🎲 Rare drops</h3><p class="muted small">The wiki's ${esc(s.name)} page lists drop weights rather than chances, so they can't be converted to odds yet.</p>`;
+  const [tier, list] = d, tries = (s.kills || [])[tier - 1] || 0;
+  return `<h3 class="ph">🎲 Rare drops <span class="muted small">(Tier ${tier}, rarest first)</span></h3>${dropControls(st)}
+    <div class="card"><div class="small" style="columns:2 320px">${list.map(([n, b, p, mf]) => dropLine(st, n, b, {pet:p, mf, tries})).join("")}</div>
+    <p class="muted small" style="margin:6px 0 0">Chances from the wiki for Tier ${tier}. "By your kills" uses your ${fmt(tries)} Tier ${tier} kills. Slayer RNG Meter progress isn't counted, so real odds are better. Some drops also need a minimum slayer level.</p></div>`;
+}
+
 // Kills and bestiary progress for rare mobs (Scatha, Jawbus, Inquisitor…), plus whether you own their pet
 function rareMobsHTML(st, skill){
   const list = RARE_MOBS[skill]; if (!list) return "";
@@ -3210,7 +3259,7 @@ function rareMobsHTML(st, skill){
     ${rows.map(r => `<tr${r.tier >= r.max ? ' style="opacity:.7"' : ""}><td><b>${esc(r.name)}</b><div class="muted small">${esc(r.note)}</div></td>
       <td><b>${fmt(r.kills)}</b>${r.shared ? `<div class="muted small">${fmt(r.famKills)} in shared entry</div>` : ""}</td>
       <td class="small">Tier ${r.tier}/${r.max}${r.tier >= r.max ? ' <span class="good">maxed</span>' : `${bar(pct(r.famKills - r.prev, r.nextAt - r.prev))}<span class="muted">${fmt(r.nextAt - r.famKills)} more to tier ${r.tier + 1}</span>`}</td>
-      <td class="small">${!r.pet ? '<span class="muted">—</span>' : r.owned ? `<span class="good">✓ ${esc(r.owned.tier.toLowerCase())}</span>${r.owned.tier !== "LEGENDARY" ? '<div class="muted">a Legendary one can still drop</div>' : ""}` : `<span class="muted">not owned</span>`}<div class="muted">${r.pet ? esc(nameOf(r.pet).replace(/_/g, " ")) : ""}</div></td>${rows.some(x => x.drops) ? `<td class="small">${r.drops ? r.drops.map(([n, b, p]) => dropLine(st, n, b, {pet:p, tries:r.kills})).join("") : '<span class="muted">—</span>'}</td>` : ""}</tr>`).join("")}
+      <td class="small">${!r.pet ? '<span class="muted">—</span>' : r.owned ? `<span class="good">✓ ${esc(r.owned.tier.toLowerCase())}</span>${r.owned.tier !== "LEGENDARY" ? '<div class="muted">a Legendary one can still drop</div>' : ""}` : `<span class="muted">not owned</span>`}<div class="muted">${r.pet ? esc(nameOf(r.pet).replace(/_/g, " ")) : ""}</div></td>${rows.some(x => x.drops) ? `<td class="small">${r.drops ? r.drops.map(([n, b, p, mf]) => dropLine(st, n, b, {pet:p, mf, tries:/per eye/.test(n) ? null : r.kills})).join("") : '<span class="muted">—</span>'}</td>` : ""}</tr>`).join("")}
     </tbody></table></div>`;
 }
 
