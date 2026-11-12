@@ -26,6 +26,7 @@ button.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--l
 button:disabled{opacity:.5;cursor:default}
 main{max-width:1200px;margin:0 auto;padding:18px 20px 60px}
 nav{display:flex;flex-wrap:wrap;gap:8px 14px;margin-bottom:16px;align-items:flex-end}
+.dropline{white-space:nowrap;line-height:1.5}
 .tgroup{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:4px;border:1px solid var(--line);border-radius:10px;position:relative}
 .tglabel{position:absolute;top:-8px;left:10px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--bg);padding:0 4px}
 nav .tgroup:has(.tglabel){padding-top:8px}
@@ -2739,16 +2740,16 @@ function viewRift(st){
 // ---------- Account upgrades: permanent consumables, minion slots, bag, abiphone… ----------
 // [id, name, max, effect per use, how to get, profile-key regex]
 const PERM_CONSUMABLES = [
-  ["REAPER_PEPPER", "Reaper Pepper", 5, "+1 Health, +1 Cold Resistance", "Inferno Minion with Hypergolic fuel (very rare)", /reaper_pepper/i],
-  ["WRIGGLING_LARVA", "Wriggling Larva", 5, "+2 Bonus Pest Chance", "1% drop from Moths (Garden pest)", /wriggling|larva/i],
+  ["REAPER_PEPPER", "Reaper Pepper", 5, "+1 Health, +1 Cold Resistance", "Inferno Minion with Hypergolic fuel, per harvested item", /reaper_pepper/i, [["Inferno Minion item", 1 / 458182, false, false]]],
+  ["WRIGGLING_LARVA", "Wriggling Larva", 5, "+2 Bonus Pest Chance", "Drop from Moths (Garden pest)", /wriggling|larva/i, [["Moth", 0.01]]],
   ["BEE_SALIVA", "Bee Saliva", 5, "+1 Foraging Fortune", "Crafted from Honeycomb and Enchanted Helix Log", /saliva/i],
-  ["BRAIN_FOOD", "Brain Food", 5, "+1 Tracking", "Drop from Empyrean / Exalted Sphinx (Mythological)", /brain_food/i],
-  ["FESTERING_MAGGOT", "Festering Maggot", 5, "+1 Defense", "0.5% from Revenant Horror T4+ at Zombie Slayer 6", /maggot/i],
-  ["VIAL_OF_VENOM", "Vial of Venom", 5, "+1 Crit Damage", "0.5% from Tarantula Broodfather T4+ at Spider Slayer 6", /venom/i],
-  ["ISOPOD_HUSK", "Isopod Husk", 5, "+1 Respiration", "2% from Giant Isopod", /isopod/i],
-  ["MOUND_OF_SEAGRASS", "Mound of Seagrass", 5, "+1 Pressure Resistance", "2% from Nessie", /seagrass/i],
+  ["BRAIN_FOOD", "Brain Food", 5, "+1 Tracking", "Drop from Empyrean / Exalted Sphinx (Mythological)", /brain_food/i, [["Empyrean Sphinx", 0.005], ["Exalted Sphinx", 0.0025]]],
+  ["FESTERING_MAGGOT", "Festering Maggot", 5, "+1 Defense", "Revenant Horror T4+ at Zombie Slayer 6", /maggot/i, [["Revenant Horror T4+", 0.005]]],
+  ["VIAL_OF_VENOM", "Vial of Venom", 5, "+1 Crit Damage", "Tarantula Broodfather T4+ at Spider Slayer 6", /venom/i, [["Tarantula T4+", 0.005]]],
+  ["ISOPOD_HUSK", "Isopod Husk", 5, "+1 Respiration", "Drop from Giant Isopod", /isopod/i, [["Giant Isopod", 0.02]]],
+  ["MOUND_OF_SEAGRASS", "Mound of Seagrass", 5, "+1 Pressure Resistance", "Drop from Nessie", /seagrass/i, [["Nessie", 0.02]]],
   ["FEAST_BURGER", "Feast Burger with a Side of Deepfries", 5, "+1 Overbloom", "Crafted from Feastfungus, Deepfries, Cornucopia, Enchanted Hay Bale", /feast_burger|deepfries/i],
-  ["METAPHYSICAL_SERUM", "Metaphysical Serum", 3, "Superpairs chain 1 shorter", "~1% from Grand+ Experiments", /metaphysical|serum/i],
+  ["METAPHYSICAL_SERUM", "Metaphysical Serum", 3, "Superpairs chain 1 shorter", "Grand or higher Experiments", /metaphysical|serum/i, [["Grand+ Experiment", 0.0106, false, false]]],
 ];
 const MINION_SLOTS = [[0,5],[5,6],[15,7],[30,8],[50,9],[75,10],[100,11],[125,12],[150,13],[175,14],[200,15],[225,16],[250,17],[275,18],[300,19],[350,20],[400,21],[450,22],[500,23],[550,24],[600,25],[650,26],[700,27]];
 function findInProfile(me, re){
@@ -2768,18 +2769,18 @@ function findInProfile(me, re){
 function viewUpgrades(st){
   const me = st.raw || {}, prof = st.rawProfile || {};
   // permanent consumables
-  const cons = PERM_CONSUMABLES.map(([id, name, max, eff, how, re]) => {
+  const cons = PERM_CONSUMABLES.map(([id, name, max, eff, how, re, drops]) => {
     const hit = findInProfile(me, re), manual = store.get("cons:" + id, null);
     const n = manual != null ? manual : hit ? Math.min(max, hit.v) : null;
-    return {id, name, max, eff, how, hit, manual, n};
+    return {id, name, max, eff, how, hit, manual, n, drops};
   });
   const consDone = cons.filter(c => (c.n || 0) >= c.max).length;
-  const consTab = `<p class="muted small">Items you eat once for a permanent bonus (wiki: Permanent Consumables). Hypixel doesn't document where these are stored, so the tracker searches your profile data. If it can't find one, set how many you've eaten and it's saved in this browser.</p>
+  const consTab = `${dropControls(st)}<p class="muted small">Items you eat once for a permanent bonus (wiki: Permanent Consumables). Hypixel doesn't document where these are stored, so the tracker searches your profile data. If it can't find one, set how many you've eaten and it's saved in this browser.</p>
     <div class="card"><table><thead><tr><th>Item</th><th>Each use</th><th>Eaten</th><th>How to get it</th></tr></thead><tbody>
     ${cons.map(c => `<tr${(c.n || 0) >= c.max ? ' style="opacity:.65"' : ""}><td><b>${esc(c.name)}</b></td><td class="small">${esc(c.eff)}</td>
       <td><select class="consSel" data-id="${c.id}">${[["", c.hit ? `auto: ${Math.min(c.max, c.hit.v)}` : "unknown"], ...Array.from({length:c.max + 1}, (_, i) => [i, i])].map(([v, t]) => `<option value="${v}" ${String(c.manual ?? "") === String(v) ? "selected" : ""}>${t}</option>`).join("")}</select> / ${c.max}
         <div class="muted small">${c.manual != null ? "set by you" : c.hit ? `found at ${esc(c.hit.path)}` : "not found in profile"}</div></td>
-      <td class="small">${esc(c.how)}${mktPrice(c.id) ? `<div class="muted">≈ ${fmt(mktPrice(c.id))} each</div>` : ""}</td></tr>`).join("")}
+      <td class="small">${esc(c.how)}${(c.drops || []).map(([src, b, pet, mf]) => dropLine(st, src, b, {pet, mf})).join("")}${mktPrice(c.id) ? `<div class="muted">≈ ${fmt(mktPrice(c.id))} each</div>` : ""}</td></tr>`).join("")}
     </tbody></table></div>
     <p class="muted small">Divine Gift (Magic Find, from the Regalia Room) is applied to items, not eaten, so it isn't tracked here.</p>`;
   // account-wide progress
@@ -3146,6 +3147,48 @@ const RARE_MOBS = {"MINING":[
   ["Slug",["pest_slug_1"],0,250,6,null,"Garden pest"]]};
 const PET_TIERS = ["COMMON","UNCOMMON","RARE","EPIC","LEGENDARY","MYTHIC"];
 const RARE_TITLE = {MINING:"⛏ Rare mining mobs", FISHING:"🎣 Rare sea creatures", COMBAT:"⚔ Bosses & rare mobs", FARMING:"🐛 Garden pests"};
+// ---------- drop chances with your Magic Find and Pet Luck ----------
+// Wiki (Magic Find): chance = base × (1 + MF/100), pets: base × (1 + (MF + Pet Luck)/100),
+// and only for drops whose base chance is below 5%. Taming gives +1 Pet Luck per level.
+function dropStats(st){
+  const taming = st.skills.find(s => s.id === "TAMING")?.level || 0;
+  const petMF = (st.pets || []).length ? petData(st).mf : 0;
+  return {mf:+store.get("dropMF", petMF) || 0, pl:+store.get("dropPL", taming) || 0, taming, petMF};
+}
+function dropChance(st, base, pet, mfOk = true){
+  const {mf, pl} = dropStats(st);
+  const boosted = mfOk && base < 0.05;
+  return boosted ? Math.min(1, base * (1 + (mf + (pet ? pl : 0)) / 100)) : base;
+}
+const pctTxt = p => p >= 0.01 ? (p * 100).toFixed(p >= 0.1 ? 0 : 1) + "%" : p >= 0.0001 ? (p * 100).toFixed(3).replace(/0+$/, "") + "%" : (p * 100).toPrecision(2) + "%";
+const oneIn = p => p > 0 ? `1 in ${fmt(Math.round(1 / p))}` : "—";
+// one line for a drop: base → yours, expected tries, and the chance you'd have it by now
+function dropLine(st, name, base, opts = {}){
+  const eff = dropChance(st, base, opts.pet, opts.mf !== false);
+  const by = opts.tries != null ? 1 - Math.pow(1 - eff, opts.tries) : null;
+  return `<div class="dropline"><b>${esc(name)}</b> <span class="muted">${pctTxt(base)}</span>${eff !== base ? ` → <span class="good">${pctTxt(eff)}</span>` : opts.mf === false ? ' <span class="muted">(no MF)</span>' : base >= 0.05 ? ' <span class="muted">(≥5%, no MF)</span>' : ""}
+    <span class="muted">· ${oneIn(eff)}</span>${by != null && opts.tries > 0 ? ` · <span title="Chance of at least one drop in your ${fmt(opts.tries)} kills">${pctTxt(by)} by your kills</span>` : ""}</div>`;
+}
+// the shared Magic Find / Pet Luck inputs (same values everywhere, saved in this browser)
+function dropControls(st){
+  const d = dropStats(st);
+  return `<div class="toolbar dropctl"><label class="chk">✨ Magic Find <input type="number" class="dropMF" min="0" max="2000" value="${d.mf}" style="width:70px"></label>
+    <label class="chk">🍀 Pet Luck <input type="number" class="dropPL" min="0" max="500" value="${d.pl}" style="width:70px"></label>
+    <span class="muted small">Your total from the stats menu. Defaults: Pet Luck = Taming level (${d.taming}), Magic Find = Pet Score bonus (+${d.petMF}). Formula from the wiki: base × (1 + MF/100), pets also add Pet Luck; only drops under 5% are boosted.</span></div>`;
+}
+document.addEventListener("change", e => {
+  const t = e.target;
+  if (t.classList?.contains("dropMF")) { store.set("dropMF", Math.max(0, +t.value || 0)); render(); }
+  else if (t.classList?.contains("dropPL")) { store.set("dropPL", Math.max(0, +t.value || 0)); render(); }
+});
+// Rare drops from the wiki drop tables: mob name → [[drop, base chance, is a pet]]
+const RARE_DROPS = {
+  "Scatha":[["Rare Scatha pet", 0.00144, true], ["Epic Scatha pet", 0.00072, true], ["Legendary Scatha pet", 0.00024, true]],
+  "Bal":[["Epic Bal pet", 0.000126, true], ["Legendary Bal pet", 0.000054, true], ["Yoggie", 0.045]],
+  "Great White Shark":[["Megalodon pet", 0.01, true], ["Carnival Ticket", 0.005], ["Great White Shark Tooth", 0.10], ["Aquamarine Dye", 1 / 50000]],
+  "Yeti":[["Baby Yeti pet", 0.02, true], ["True Ice", 0.01], ["Iceberg Dye", 1 / 50000]],
+};
+
 // Kills and bestiary progress for rare mobs (Scatha, Jawbus, Inquisitor…), plus whether you own their pet
 function rareMobsHTML(st, skill){
   const list = RARE_MOBS[skill]; if (!list) return "";
@@ -3157,16 +3200,17 @@ function rareMobsHTML(st, skill){
     const tier = th.filter(x => famKills >= x).length, nextAt = th[tier];
     const prev = tier ? th[tier - 1] : 0;
     const owned = pet ? (st.pets || []).filter(p => p.type === pet).sort((a, b) => PET_TIERS.indexOf(b.tier) - PET_TIERS.indexOf(a.tier))[0] : null;
-    return {name, kills, famKills, shared:!!famKeys, tier, max:th.length, nextAt, prev, pet, owned, note};
+    return {name, kills, famKills, shared:!!famKeys, tier, max:th.length, nextAt, prev, pet, owned, note, drops:RARE_DROPS[name]};
   });
   const done = rows.filter(r => r.tier >= r.max).length;
   return `<h3 class="ph">${RARE_TITLE[skill]} <span class="muted small">(${done}/${rows.length} bestiary maxed)</span></h3>
     ${has ? "" : `<p class="muted small">No bestiary kills found in your profile data${st.demo ? "" : " (the Bestiary API may be off)"}, so kills show 0.</p>`}
-    <div class="card"><table data-limit="${skill === "FARMING" ? 6 : 8}"><thead><tr><th>Mob</th><th>Kills</th><th style="width:26%">Bestiary</th><th>Pet</th></tr></thead><tbody>
+    ${rows.some(r => r.drops) ? dropControls(st) : ""}
+    <div class="card"><table data-limit="${skill === "FARMING" ? 6 : 8}"><thead><tr><th>Mob</th><th>Kills</th><th style="width:22%">Bestiary</th><th>Pet</th>${rows.some(r => r.drops) ? "<th>Rare drops (wiki) → with your MF / Pet Luck</th>" : ""}</tr></thead><tbody>
     ${rows.map(r => `<tr${r.tier >= r.max ? ' style="opacity:.7"' : ""}><td><b>${esc(r.name)}</b><div class="muted small">${esc(r.note)}</div></td>
       <td><b>${fmt(r.kills)}</b>${r.shared ? `<div class="muted small">${fmt(r.famKills)} in shared entry</div>` : ""}</td>
       <td class="small">Tier ${r.tier}/${r.max}${r.tier >= r.max ? ' <span class="good">maxed</span>' : `${bar(pct(r.famKills - r.prev, r.nextAt - r.prev))}<span class="muted">${fmt(r.nextAt - r.famKills)} more to tier ${r.tier + 1}</span>`}</td>
-      <td class="small">${!r.pet ? '<span class="muted">—</span>' : r.owned ? `<span class="good">✓ ${esc(r.owned.tier.toLowerCase())}</span>${r.owned.tier !== "LEGENDARY" ? '<div class="muted">a Legendary one can still drop</div>' : ""}` : `<span class="muted">not owned</span>`}<div class="muted">${r.pet ? esc(nameOf(r.pet).replace(/_/g, " ")) : ""}</div></td></tr>`).join("")}
+      <td class="small">${!r.pet ? '<span class="muted">—</span>' : r.owned ? `<span class="good">✓ ${esc(r.owned.tier.toLowerCase())}</span>${r.owned.tier !== "LEGENDARY" ? '<div class="muted">a Legendary one can still drop</div>' : ""}` : `<span class="muted">not owned</span>`}<div class="muted">${r.pet ? esc(nameOf(r.pet).replace(/_/g, " ")) : ""}</div></td>${rows.some(x => x.drops) ? `<td class="small">${r.drops ? r.drops.map(([n, b, p]) => dropLine(st, n, b, {pet:p, tries:r.kills})).join("") : '<span class="muted">—</span>'}</td>` : ""}</tr>`).join("")}
     </tbody></table></div>`;
 }
 
