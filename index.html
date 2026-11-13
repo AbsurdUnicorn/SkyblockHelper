@@ -4,12 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SkyBlock Helper</title>
-<link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0f1117">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="SkyBlock Helper">
 <style>
 :root{
   --bg:#0f1117;--panel:#171a23;--panel2:#1e2230;--line:#2a2f40;--text:#e6e8ef;--muted:#8f96ab;
@@ -130,7 +126,6 @@ details summary{cursor:pointer;padding:4px 0}
   <input id="recipeSearch" list="itemNames" placeholder="🔍 Look up a recipe…" title="Type an item name and press Enter">
   <datalist id="itemNames"></datalist>
   <span id="status" class="muted small"></span>
-  <button id="installApp" class="ghost" hidden title="Install as an app with its own window and desktop icon">⬇ Install app</button>
 </header>
 <main>
   <div id="notice"></div>
@@ -3637,52 +3632,6 @@ $("#demo").addEventListener("click", loadDemo);
 $("#profile").addEventListener("change", showProfile);
 [$("#username"), $("#apikey")].forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") loadPlayer(); }));
 
-// ---------- installable app ----------
-// Chrome / Edge fire beforeinstallprompt when the page can be installed; we show our own button for it.
-// Safari has no prompt, so on iPhone/iPad the button explains Share → Add to Home Screen instead.
-(function installApp(){
-  if (!/^https?:$/.test(location.protocol)) return;
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
-  const btn = $("#installApp"), standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
-  if (standalone) return;
-  let ev = null;
-  addEventListener("beforeinstallprompt", e => { e.preventDefault(); ev = e; btn.hidden = false; });
-  addEventListener("appinstalled", () => { btn.hidden = true; ev = null; });
-  if (/iPhone|iPad|iPod/.test(navigator.userAgent)) btn.hidden = false;
-  btn.addEventListener("click", async () => {
-    if (ev){ ev.prompt(); await ev.userChoice; ev = null; btn.hidden = true; }
-    else notice("To install: tap <b>Share</b> → <b>Add to Home Screen</b>. In Chrome or Edge on a computer, use the install icon in the address bar.");
-  });
-})();
-
-// ---------- auto-update: when a new version is published, open copies offer to reload ----------
-// Compares a hash of the live page with the version this tab loaded. Only runs when served over http(s).
-(function updateCheck(){
-  if (!/^https?:$/.test(location.protocol)) return;
-  const hash = s => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; };
-  const url = () => location.pathname + "?v=" + Date.now();
-  let base = null, shown = false;
-  const check = async () => {
-    if (shown) return;
-    try {
-      const r = await fetch(url(), {cache:"no-store"}); if (!r.ok) return;
-      const h = hash(await r.text());
-      if (base == null){ base = h; return; }
-      if (h === base) return;
-      // tab in the background: just reload; otherwise ask, so nobody loses what they're looking at
-      if (document.hidden){ location.reload(); return; }
-      shown = true;
-      const bar = document.createElement("div");
-      bar.className = "msg"; bar.style.cssText = "position:fixed;bottom:16px;right:16px;z-index:50;box-shadow:0 4px 16px rgba(0,0,0,.4)";
-      bar.innerHTML = `✨ A new version of the tracker is available. <button id="updNow" style="margin-left:8px">Reload</button>`;
-      document.body.appendChild(bar);
-      $("#updNow").addEventListener("click", () => location.reload());
-    } catch {}
-  };
-  check();
-  setInterval(check, 5 * 60e3);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
-})();
 </script>
 </body>
 </html>
