@@ -1596,9 +1596,10 @@ async function fillShards(){
       {id:"fuse", label:"Fusions", count:fus.length, html:fusions},
       {id:"money", label:"💰 Money making", html:moneyPane()},
       {id:"where", label:"Where to hunt", html:where},
+      {id:"activity", label:"📍 By activity", html:shardByActivityHTML(S, an)},
       {id:"all", label:"All shards", count:rows.length, html:all},
     ])}`;
-    limitRows(out);
+    limitRows(out); setTimeout(fillShardCtx, 0);
 
     // All-shards filters
     const apply = () => {
@@ -2140,9 +2141,9 @@ async function fillForaging(){
     ${subTabs("foraging", [
       {id:"level", label:"Level HotF", html:progress},
       {id:"money", label:"💰 Money while foraging", html:money},
-      {id:"shards", label:"Foraging shards", html:shards},
+      {id:"shards", label:"Foraging shards", html:shards + `<div data-shard-ctx="foraging,hotf" data-title="Every shard for foraging and HotF" data-open="1"></div>`},
     ])}`;
-    limitRows(out);
+    limitRows(out); setTimeout(fillShardCtx, 0);
   } catch(e){ console.error(e); out.innerHTML = `<div class="msg err">Couldn't load foraging data: ${esc(e.message)}</div>`; }
 }
 
@@ -2291,6 +2292,7 @@ async function fillSlayers(){
       </div>
       <p class="small">📍 <b>${esc(info.area)}</b>. ${esc(info.tip)}</p>
       <h3 class="ph">🔮 Shards</h3><div class="card">${slayerShardTable(S, an, mine, true)}</div>
+      <div data-shard-ctx="slayer-${s.id},slayers" data-title="Every shard that helps against ${esc(s.name)}"></div>
       ${slayerDropsHTML(st, s)}
       <h3 class="ph">🎒 Items you unlock <span class="muted small">(⭐ = guide pick, from Hypixel's item list)</span></h3>
       <div class="card">${slayerGearHTML(st, g, s, {limit:12})}</div>`; };
@@ -2316,7 +2318,7 @@ async function fillSlayers(){
     };
     $("#slHideOwned")?.addEventListener("change", applyGear); $("#slKeyOnly")?.addEventListener("change", applyGear); applyGear();
     out.querySelectorAll("[data-slgo]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); out.querySelector(`.subtabs [data-pane="${a.dataset.slgo}"]`)?.click(); }));
-    limitRows(out);
+    limitRows(out); setTimeout(fillShardCtx, 0);
   } catch(e){ console.error(e); out.innerHTML = `<div class="msg err">Couldn't load slayer data: ${esc(e.message)}</div>`; }
 }
 
@@ -2403,7 +2405,7 @@ function viewPets(st){
       ${statCard("Max level", D.pets.filter(p => p.level >= p.max).length, `of ${D.pets.length} pets`, null)}
       ${statCard("Active pet", active ? esc(petName(active.type)) : "—", active ? `${prettyKey(active.tier)} · level ${active.level}` : "", null)}
     </div>
-    ${subTabs("pets", [{id:"mine", label:"My pets", count:D.pets.length, html:mine}, {id:"score", label:"Pet Score", html:score}, {id:"missing", label:"Missing pets", count:D.missing.length, html:miss}, {id:"flips", label:"💰 Levelling flips", html:needMarket() ? petFlipsHTML(st) : '<div class="muted">Loading prices…</div>'}])}`;
+    ${subTabs("pets", [{id:"mine", label:"My pets", count:D.pets.length, html:mine}, {id:"score", label:"Pet Score", html:score}, {id:"missing", label:"Missing pets", count:D.missing.length, html:miss}, {id:"shards", label:"🔮 Pet shards", html:`<div data-shard-ctx="pets" data-title="Shards that help pets" data-open="1"></div>`}, {id:"flips", label:"💰 Levelling flips", html:needMarket() ? petFlipsHTML(st) : '<div class="muted">Loading prices…</div>'}])}`;
 }
 
 // ---------- Heart of the Mountain (shown in Skills → Mining) ----------
@@ -2568,11 +2570,11 @@ async function fillMining(){
       {id:"money", label:"💰 Money while mining", html:money},
       {id:"forge", label:"🔨 Forge profits", html:forgeHTML(st)},
       {id:"rare", label:"🐛 Scatha & rare mobs", html:rareMobsHTML(st, "MINING")},
-      {id:"shards", label:"Mining shards", html:goalHTML(S, an, "mining")},
+      {id:"shards", label:"Mining shards", html:goalHTML(S, an, "mining") + `<div data-shard-ctx="mining,hotm" data-title="Every shard for mining and HotM" data-open="1"></div>`},
     ])}`;
     $("#hotmComm")?.addEventListener("change", e => { store.set("hotmComm", Math.max(0, +e.target.value || 0)); fillMining(); });
     $("#hotmArea")?.addEventListener("change", e => { store.set("hotmArea", e.target.value); fillMining(); });
-    limitRows(out);
+    limitRows(out); setTimeout(fillShardCtx, 0);
   } catch(e){ console.error(e); out.innerHTML = `<div class="msg err">Couldn't load mining data: ${esc(e.message)}</div>`; }
 }
 
@@ -3097,6 +3099,145 @@ function extraFocusAreas(st){
   return areas;
 }
 
+// ---------- where every shard helps ----------
+// Built by reading each shard's attribute text. Codes: skills (farming, mining…), places (dungeons, kuudra, end, crimson,
+// mythological, garden, hotm, hotf, events), slayers (slayer-zombie… or "slayers" for all), "stats" = general combat
+// stats (combat + every slayer + dungeons + Kuudra), and "@Type" = a mob type, expanded with SHARD_TYPE_CTX below.
+// Mob types from the wiki: Revenant = Undead, Tarantula = Arthropod, Sven = Animal, Voidgloom = Ender,
+// Inferno Demonlord = Infernal (not Airborne), Riftstalker = no type, Kuudra = Infernal + Cubic (its mobs Undead,
+// golems Construct, Dropships Airborne), Necron = Arcane, Bonzo/Livid = Humanoid, Sadan's Terracottas/Giants = Construct,
+// dungeon bats and Ender Dragons = Airborne, Lord Jawbus = Construct, The Loch Emperor = Skeletal.
+const SHARD_TYPE_CTX = {
+  Undead:["slayer-zombie", "dungeons", "kuudra"], Arthropod:["slayer-spider"], Animal:["slayer-wolf", "mythological", "combat"],
+  Ender:["slayer-enderman", "end"], Infernal:["slayer-blaze", "kuudra", "crimson"], Magmatic:["crimson", "fishing"],
+  Skeletal:["dungeons", "fishing"], Humanoid:["dungeons", "mining", "crimson"], Construct:["dungeons", "kuudra", "mining", "fishing"],
+  Airborne:["end", "dungeons", "kuudra", "crimson"], Arcane:["dungeons", "crimson"], Cubic:["kuudra", "mining", "crimson"],
+  Elusive:["mining"], Subterranean:["mining"], Frozen:["events"], Mythological:["mythological"], Pest:["garden"],
+  Woodland:["foraging"], Critter:["hunting", "foraging"], Aquatic:["fishing"],
+};
+const SHARD_USE = {
+  "Grove":"stats", "Mist":"stats", "Flash":"stats", "Phanpyre":"foraging", "Cod":"fishing", "Howling Spirit":"@Animal",
+  "Phanflare":"foraging", "Dumpster Diver":"@Aquatic", "Lapis Zombie":"enchanting,combat", "Hideonleaf":"mining", "Verdant":"fishing",
+  "Chill":"@Skeletal", "Fly":"farming", "Bogged":"fishing", "Voracious Spider":"@Arthropod", "Hideongift":"events", "Birries":"foraging",
+  "Tank Zombie":"@Undead", "Crow":"foraging", "Tadgang":"foraging", "Zealot":"@Ender", "Rabbit Mafioso":"events", "Coralot":"fishing",
+  "Harpy":"foraging,hunting", "Mudworm":"garden", "Lotusfish":"fishing", "Golden Ghoul":"combat", "Locust":"garden", "Azure":"foraging,hunting",
+  "Bezal":"@Infernal", "Stag Beetle":"@Woodland", "Inkling":"fishing", "Yog":"mining", "Boreal Owl":"pets,taming", "Newt":"hunting",
+  "Miner Zombie":"mining", "Flitter":"mining", "Tepid":"fishing", "Cretan Bull":"@Mythological", "Ant":"hunting", "Cavernfish":"fishing",
+  "Strongarm":"@Frozen", "Hideonsun":"mining", "Haggard":"@Skeletal", "Honeyhog":"hunting,foraging", "Shyworm":"@Subterranean",
+  "Brineling":"@Arcane", "Chocobun":"events", "Foxtrot":"foraging", "Firefox":"foraging", "Groundhog":"foraging", "Timil":"foraging",
+  "Blue Jay":"@Airborne", "Bunbun":"events", "Honeybuzz":"foraging,hunting", "Pollendart":"hunting", "Bramble":"stats", "Tide":"stats",
+  "Quake":"stats", "Sparrow":"foraging", "Goldfin":"fishing", "Troglobyte":"mining,hotm", "Hideoncave":"mining", "Salamander":"hunting",
+  "Cuboa":"mining,dungeons,kuudra,accessories", "Field Mouse":"garden", "Mossybit":"hunting", "Rain Slime":"combat,dungeons",
+  "Wetwing":"@Humanoid", "Seer":"end", "Heron":"foraging", "Sea Witch":"events", "Obsidian Defender":"combat", "Cricket":"garden",
+  "Salmon":"fishing", "Viper":"hunting", "Praying Mantis":"@Pest", "Lotum":"hunting", "Zombie Soldier":"@Undead", "Bambuleaf":"foraging",
+  "Treasure Hoarder":"mining,hotm", "Sycophant":"combat,slayers,dungeons", "Seagull":"foraging", "Ent":"@Woodland", "Soul of the Alpha":"combat",
+  "Mochibear":"foraging", "Magma Slug":"fishing", "Flaming Spider":"@Arthropod", "Kiwi":"pets", "Zealot Bruiser":"@Ender",
+  "Stridersurfer":"@Magmatic", "Rana":"pets", "Earthworm":"garden", "Flipflopper":"fishing", "Polaris":"@Frozen", "Treefrog":"foraging,pets",
+  "Bayou Sludge":"garden", "Areita":"pets", "Bluebird":"@Airborne", "Osedax":"fishing", "Duplico":"@Arcane", "Litterbug":"fishing",
+  "Water Snake":"hunting,fishing", "Gazer":"hunting,end", "Honeybug":"garden", "Shuddersquid":"hunting,fishing", "Solsnatcher":"combat",
+  "Sepialot":"fishing", "Honey Badger":"hunting", "Driftling":"@Subterranean", "Tewtil":"hunting", "Minos Hunter":"@Mythological",
+  "Woodchucker":"misc", "Solar":"foraging,hotf", "Parched":"garden", "Bloodbat":"misc", "Dustybit":"hunting", "Woodlouse":"garden",
+  "Ember":"foraging,hotf", "Cheeky Tiki":"fishing", "Red Panda":"garden", "Sprawl":"@Animal", "Sneaky Tiki":"hunting,fishing",
+  "Packrat":"mining,events", "Shrieky Tiki":"@Construct", "Woodpecker":"foraging", "Honeymite":"mining,end", "Queen Ant":"@Elusive",
+  "Hawk":"foraging", "June Bug":"hunting", "Dung Beetle":"garden", "Rat":"garden", "Keeled Slug":"garden", "Mite":"garden", "Moth":"garden",
+  "Mosquito":"farming", "Rabbit Cat":"events", "Sylvan":"stats", "Cascade":"stats", "Bolt":"stats", "Bambloom":"foraging", "Toad":"fishing",
+  "Glacite Walker":"mining", "Beaconmite":"foraging", "Lizard King":"hunting", "Python":"hunting", "Invisibug":"garden", "Piranha":"foraging",
+  "Hideongeon":"dungeons", "Lapis Skeleton":"enchanting", "Beetle":"farming", "Drowned":"@Undead", "Vulture":"foraging",
+  "Star Sentry":"mining,hotm", "Hideondra":"kuudra", "Abyssal Lanternfish":"mining", "Arachne":"slayer-spider", "Bitbug":"misc",
+  "Lava Leech":"kuudra,crimson", "Revenant":"dungeons,slayer-zombie", "Folf":"dungeons", "Silentdepth":"mining", "Skeletor":"combat,dungeons,kuudra",
+  "Thyst":"mining,hotm", "Seashine":"fishing", "Quartzfang":"mining", "Hideonring":"accessories", "Snowfin":"events", "Kada Knight":"combat,slayers,dungeons,kuudra",
+  "Hummingbird":"foraging", "Carrot King":"events", "Wither Spectre":"combat,dungeons,kuudra", "Badger":"hunting", "Matcho":"combat",
+  "Ladybug":"garden", "Lumisquid":"foraging,fishing", "Crocodile":"hunting", "Wild Hog":"@Animal", "Bullfrog":"foraging,hotf",
+  "Dreadwing":"foraging,hunting", "Joydive":"fishing,foraging", "Stalagmight":"mining,hotm", "Fungloom":"mining", "Eel":"hunting",
+  "King Cobra":"hunting", "Hewver":"@Critter", "Lava Flame":"@Magmatic", "Draconic":"end,dungeons", "Falcon":"pets,taming,combat",
+  "Inferno Koi":"crimson", "Wither":"dungeons", "Gecko":"foraging", "Wiki Tiki":"@Construct", "Minotaur":"@Mythological", "Hivethief":"@Cubic",
+  "Maggot":"fishing", "Snoozle":"mining", "Parakeet":"@Airborne", "Thunder":"fishing", "Rockmite":"hunting,mining", "Anteater":"dungeons",
+  "Scrappy":"mining", "Hideyho":"@Elusive", "Mantis Shrimp":"fishing", "Chuckwalla":"@Subterranean", "Hideonfloor":"@Woodland",
+  "Gimmiegold":"mining,pets", "Billygoat":"@Frozen", "Hideonwall":"@Arcane", "Nozzlenose":"hunting", "Stoneworm":"mining,events",
+  "Fluffling":"hunting", "Stingray":"foraging", "Zombuddy":"garden", "Puck":"foraging", "Troodon":"mining", "Black Widow":"@Arthropod",
+  "Pangolin":"foraging,hotf", "Giant Water Bug":"@Aquatic", "Murkbat":"dungeons", "Goldolot":"fishing", "Rabbit Neighbor":"events",
+  "Torrid":"foraging", "Drybark":"foraging", "Terra":"stats", "Cryo":"stats", "Aero":"stats", "Pandarai":"foraging", "Leviathan":"hunting",
+  "Alligator":"combat,slayers,dungeons,kuudra", "Fenlord":"foraging", "Abyssal Miner":"mining", "Basilisk":"hunting", "Iguana":"mining,foraging,hotm,hotf",
+  "Moray Eel":"hunting,fishing", "Special Zealot":"end", "Lunar Moth":"farming", "Fire Eel":"fishing", "Bal":"mining", "Hideonsack":"misc",
+  "Water Hydra":"fishing", "Flare":"@Infernal", "Murderwing":"misc", "Loch Emperor":"fishing", "Prince":"dungeons", "Komodo Dragon":"dungeons,slayers",
+  "Blue Crab":"fishing", "Mimic":"dungeons", "Wolverine":"slayers", "Shellwise":"dungeons,kuudra,combat", "Barbarian Duke X":"combat,slayers,dungeons,kuudra",
+  "Toucan":"pets,taming", "Caiman":"combat,slayers,dungeons,kuudra", "Firefly":"farming", "Sea Serpent":"hunting", "Ghost":"stats", "XYZ":"combat,dungeons,kuudra",
+  "Leatherback":"hunting", "Cavernshade":"mining", "Dragonfly":"farming", "Sphinx":"mythological", "King Minos":"mythological",
+  "Dive Ghast":"mining", "Silkbreeze":"foraging", "Gemzie":"mining", "Rabbit Godmother":"events", "Giant Isopod":"fishing",
+  "Inferno Demonlord":"stats", "Queen Bee":"foraging,hunting", "Bonzo":"dungeons", "Beeheemoth":"hunting", "Scarf":"dungeons",
+  "Thorn":"combat,slayers,dungeons,kuudra", "Mountain Goat":"social", "Scatha":"mining,events", "Nilbog":"mining", "Littlefoot":"mining",
+  "Tenebris":"stats", "Blizzard":"stats", "Tempest":"stats", "Chameleon":"hunting", "Nessie":"fishing", "Tiamat":"misc,hunting", "Wyvern":"misc",
+  "Tortoise":"combat", "End Stone Protector":"stats", "Rabbit Godfather":"events", "Naga":"hunting", "Lapis Creeper":"enchanting",
+  "Wartybug":"farming", "Spike":"combat", "Kraken":"stats", "Taurus":"stats", "Daemon":"slayers,dungeons", "Moltenfish":"fishing,hunting",
+  "Doomspiral":"hunting", "Macaw":"hunting", "Shinyfish":"stats", "Ananke":"mythological", "Hideonbox":"accessories", "Lord Jawbus":"fishing,crimson",
+  "Hellwisp":"crimson", "Cinderbat":"combat,slayers,fishing", "Megalith":"hunting", "Power Dragon":"combat,slayers,dungeons,kuudra",
+  "Condor":"taming,pets", "Sun Fish":"misc", "Apex Dragon":"combat,slayers,dungeons", "Dodo":"hunting", "Queen Snake":"garden", "Jormung":"stats",
+  "Ghost Crab":"fishing", "Etherdrake":"stats", "Grizzly Bear":"foraging", "Galaxy Fish":"mining,farming,foraging", "Molthorn":"stats",
+  "Starborn":"stats", "Primordial":"slayers", "Cocoaleech":"garden", "Titanoboa":"fishing", "Rainbug":"misc", "Flora":"garden", "Paragon":"slayers",
+  "Timestalk Clone":"garden", "Wumpa":"mining",
+};
+const SHARD_CTX_LABEL = {farming:"Farming", garden:"Garden", mining:"Mining", hotm:"Heart of the Mountain", foraging:"Foraging", hotf:"Heart of the Forest",
+  fishing:"Fishing", combat:"Combat", enchanting:"Enchanting", taming:"Taming", hunting:"Hunting", social:"Social", dungeons:"Dungeons", kuudra:"Kuudra",
+  end:"The End & dragons", crimson:"Crimson Isle", mythological:"Mythological Ritual", events:"Events (Hoppity, Jerry, Fiesta, Witch)", pets:"Pets",
+  accessories:"Accessories", misc:"Other / quality of life", slayers:"Every slayer", "slayer-zombie":"Revenant Horror", "slayer-spider":"Tarantula Broodfather",
+  "slayer-wolf":"Sven Packmaster", "slayer-enderman":"Voidgloom Seraph", "slayer-blaze":"Inferno Demonlord", "slayer-vampire":"Riftstalker Bloodfiend"};
+const STATS_CTX = ["combat", "slayers", "dungeons", "kuudra"];
+// shard name → list of {ctx, why}
+let SHARD_CTX_IDX = null;
+function shardContexts(){
+  if (SHARD_CTX_IDX) return SHARD_CTX_IDX;
+  const idx = {};
+  const add = (name, ctx, why) => { (idx[name] ||= []).some(x => x.ctx === ctx) || idx[name].push({ctx, why}); };
+  for (const [name, spec] of Object.entries(SHARD_USE)) for (const code of spec.split(",")){
+    if (code === "stats") STATS_CTX.forEach(c => add(name, c, "combat stat"));
+    else if (code[0] === "@") (SHARD_TYPE_CTX[code.slice(1)] || []).forEach(c => add(name, c, code.slice(1) + " mobs"));
+    else add(name, code, "");
+  }
+  return SHARD_CTX_IDX = idx;
+}
+// all shards for a list of contexts; slayer pages also get the "every slayer" shards
+function shardsFor(S, an, ctxs){
+  const idx = shardContexts(), out = [];
+  for (const s of S.list){
+    const hit = (idx[s.name] || []).filter(x => ctxs.includes(x.ctx)); if (!hit.length) continue;
+    const r = an.byId[s.id]; if (r) out.push({r, why:hit.map(x => x.why || SHARD_CTX_LABEL[x.ctx]).filter((v, i, a) => a.indexOf(v) === i).join(", ")});
+  }
+  const cost = x => x.r.level >= 10 ? Infinity : x.r.bestCost == null ? 1e15 : Math.max(0, x.r.toMax - x.r.loose) * x.r.bestCost;
+  return out.sort((a, b) => cost(a) - cost(b));
+}
+function shardCtxTable(S, an, list, limit){
+  if (!list.length) return `<div class="muted small">No shards apply here.</div>`;
+  const costMax = r => r.level >= 10 ? 0 : r.bestCost == null ? null : Math.max(0, r.toMax - r.loose) * r.bestCost;
+  return `<div class="card"><table${limit ? ` data-limit="${limit}"` : ""}><thead><tr><th>Shard</th><th>What it does</th><th>Why here</th><th>Level</th><th>Cost to max</th><th>How to get it</th></tr></thead><tbody>
+    ${list.map(({r, why}) => `<tr${r.level >= 10 ? ' style="opacity:.6"' : ""}><td>${shardName(r.s)}</td><td><b>${esc(r.s.attr)}</b><div class="small">${shardDescHTML(r.s, r.level)}</div></td>
+      <td class="small">${esc(why)}</td><td>${lvlDots(r.level)} ${r.level}/10${r.loose ? `<div class="good small">${r.loose} loose</div>` : ""}</td>
+      <td>${r.level >= 10 ? '<span class="good">maxed</span>' : costMax(r) == null ? "—" : fmt(costMax(r))}</td><td class="small">${getVia(S, r)}</td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+// placeholders: <div data-shard-ctx="dungeons,kuudra" data-title="…"></div>, filled once shard data is loaded
+async function fillShardCtx(){
+  const els = [...document.querySelectorAll("[data-shard-ctx]:not([data-filled])")]; if (!els.length || !CUR) return;
+  try {
+    const S = await loadShards(); await loadPrices().catch(() => null);
+    const an = SHARDS.an || shardAnalysis(CUR.st, S); SHARDS.an = an;
+    for (const el of els){
+      const ctxs = el.dataset.shardCtx.split(","), list = shardsFor(S, an, ctxs);
+      const maxed = list.filter(x => x.r.level >= 10).length;
+      el.dataset.filled = "1";
+      el.innerHTML = `<details class="section"${el.dataset.open ? " open" : ""}><summary><b>🔮 ${esc(el.dataset.title || "Shards that help here")}</b> <span class="muted">(${list.length} shards, ${maxed} maxed)</span></summary>
+        <p class="muted small">Every shard whose effect applies here, found by reading each shard's attribute (mob types from the wiki). Cheapest to max first.</p>${shardCtxTable(S, an, list, 12)}</details>`;
+      limitRows(el);
+    }
+  } catch(e){ console.warn(e); els.forEach(el => el.innerHTML = ""); }
+}
+// overview for the Shards tab: every place and the shards for it
+function shardByActivityHTML(S, an){
+  const groups = ["combat", "slayer-zombie", "slayer-spider", "slayer-wolf", "slayer-enderman", "slayer-blaze", "slayers", "dungeons", "kuudra", "end", "crimson", "mythological",
+    "mining", "hotm", "foraging", "hotf", "farming", "garden", "fishing", "hunting", "enchanting", "taming", "pets", "social", "events", "accessories", "misc"];
+  return `<p class="muted small">Each shard read one by one and filed under every activity its effect helps. Mob-type shards are filed by the wiki's mob types: Inferno Demonlord is <b>Infernal</b> (not Airborne), Sven is <b>Animal</b>, Voidgloom is <b>Ender</b>, Riftstalker has no mob type, so only general combat shards help there.</p>
+    ${groups.map(g => { const list = shardsFor(S, an, [g]); return list.length ? `<details class="section"><summary><b>${esc(SHARD_CTX_LABEL[g])}</b> <span class="muted">(${list.length} shards, ${list.filter(x => x.r.level >= 10).length} maxed)</span></summary>${shardCtxTable(S, an, list)}</details>` : ""; }).join("")}`;
+}
+
 // ---------- Kuudra (shown in the Dungeons tab) ----------
 function kuudraHTML(st){
   const k = dig(st.raw || {}, "nether_island_player_data.kuudra_completed_tiers");
@@ -3176,6 +3317,7 @@ function render(){
   const demo = st.demo ? `<div class="msg">Showing <b>made-up demo data</b>. Enter your username and API key to see your real progress.</div>` : "";
   v.innerHTML = demo + off + ({focus:viewFocus, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, history:viewHistory}[tab])(st, A);
   limitRows(v);
+  setTimeout(fillShardCtx, 0);
   v.querySelectorAll("[data-filter]").forEach(inp => inp.addEventListener("input", () => filterTable(inp)));
   v.querySelectorAll("[data-sort]").forEach(sel => sel.addEventListener("change", () => { store.set("sort:"+sel.dataset.sort, sel.value); render(); }));
 }
@@ -3347,6 +3489,7 @@ function viewAcc(st, A){
     {id:"miss", label:"Missing families", count:miss.length, html:missHTML},
     {id:"tips", label:"Milestones & tips", html:accGuideHTML(st, C, "tips")},
   ])}
+  <div data-shard-ctx="accessories" data-title="Shards for accessories"></div>
   <p class="muted small">Families (Talisman → Ring → Artifact → Relic) are detected from item names, so a few may be grouped wrongly. Only the best accessory in each family counts. Owned accessories are read from your accessory bag, inventory, ender chest and backpacks.</p>`;
 }
 
@@ -3553,6 +3696,7 @@ const SKILL_TIPS = {
   TAMING:["Taming XP comes from your pets gaining XP, so level pets with EXP Share and Kat.","Levels above 50 are unlocked through George."],
   HUNTING:["Hunting XP comes from catching shards with Black Holes, Lassos, Nets and Hunting Traps.","Hunting Fortune means more shards per catch. See Shards → Hunting."],
 };
+const SKILL_SHARD_CTX = {FARMING:"farming,garden", MINING:"mining,hotm", FORAGING:"foraging,hotf", FISHING:"fishing", COMBAT:"combat,end,crimson,mythological", ENCHANTING:"enchanting", TAMING:"taming,pets", HUNTING:"hunting", SOCIAL:"social"};
 function skillPane(st, s){
   const R = RES?.skills?.[s.id], link = SKILL_LINK[s.id] || {};
   const rate = +store.get("skrate:" + s.id, 0) || 0;
@@ -3583,6 +3727,7 @@ function skillPane(st, s){
     </div>
     ${colls.length ? `<h3 class="ph">${esc(link.coll)} collections <span class="muted small">(closest to next tier first)</span></h3>
       <div class="card"><table data-limit="8"><tbody>${colls.map(c => `<tr><td>${esc(c.name)}</td><td>${c.tier}/${c.maxTiers}</td><td style="width:40%">${c.tier >= c.maxTiers ? '<span class="muted">Maxed</span>' : bar(c.next ? pct(c.amount - c.prev, c.next - c.prev) : 100)}</td><td class="muted small">${fmt(c.amount)}${c.next ? ` / ${fmt(c.next)}` : ""}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${SKILL_SHARD_CTX[s.id] ? `<div data-shard-ctx="${SKILL_SHARD_CTX[s.id]}" data-title="Every shard for ${esc(s.name)}"></div>` : ""}
     ${skillMoneyHTML(st, s.id)}
     ${skillExtraHTML(st, s.id)}
     ${rareMobsHTML(st, s.id)}`;
@@ -3654,7 +3799,9 @@ function viewCombat(st){
     ${mm.length ? `<tr><td>Master mode</td>${floors.map(([k]) => `<td>${st.mmFloors[k] ? fmt(st.mmFloors[k]) : "—"}</td>`).join("")}</tr>` : ""}
   </tbody></table>${floors.length ? "" : '<div class="muted">No dungeon runs recorded.</div>'}</div></div>
   ${dungeonExtrasHTML(st)}
+  <div data-shard-ctx="dungeons" data-title="Every shard for dungeons"></div>
   ${kuudraHTML(st)}
+  <div data-shard-ctx="kuudra" data-title="Every shard for Kuudra"></div>
   ${needMarket() ? essenceMoneyHTML(st) : ""}`;
 }
 
