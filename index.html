@@ -305,7 +305,10 @@ async function buildState(R, profile, museum, uuid){
   st.skills = Object.entries(R.skills).map(([id, s]) => {
     const xp = exp?.["SKILL_" + id] || 0;
     const table = s.levels.map(l => l.totalExpRequired);
-    return {id, name:s.name, xp, maxLevel:s.maxLevel, ...levelFrom(xp, table, s.maxLevel)};
+    let cap = s.maxLevel;
+    if (id === "FARMING" && me.jacobs_contest) cap = Math.min(s.maxLevel, 50 + (me.jacobs_contest.perks?.farming_level_cap || 0));
+    if (id === "TAMING" && me.pets_data) cap = Math.min(s.maxLevel, 50 + (me.pets_data.pet_care?.pet_types_sacrificed || []).length);
+    return {id, name:s.name, xp, maxLevel:cap, fullMax:s.maxLevel, ...levelFrom(xp, table, cap)};
   });
 
   // collections (summed across coop members)
@@ -353,6 +356,7 @@ async function buildState(R, profile, museum, uuid){
   const inv = me.inventory || {};
   if (!inv.bag_contents?.talisman_bag) st.apiOff.push("Inventory / Accessory bag");
   const sources = [inv.bag_contents?.talisman_bag?.data, inv.inv_contents?.data, inv.ender_chest_contents?.data, inv.personal_vault_contents?.data,
+                   inv.inv_armor?.data, inv.equipment_contents?.data, inv.wardrobe_contents?.data,
                    ...Object.values(inv.backpack_contents || {}).map(b => b?.data)];
   const owned = [], items = {};
   for (const s of sources){
@@ -368,6 +372,7 @@ async function buildState(R, profile, museum, uuid){
   st.ownedAccessories = owned;
   st.items = items; // everything you're carrying, in storage or in sacks
   st.mpReported = me.accessory_bag_storage?.highest_magical_power;
+  st.museumOwned = new Set(Object.keys(mm?.items || {}));   // donated items still count as owned for gear checklists
   st.shardSrc = collectShardSrc(me);
   st.hotfSrc = {...collectKeys(me, /forest|foraging_core|hotf|whisper|starlyn/i), skill_tree_foraging:{experience:me.skill_tree?.experience?.foraging}};
   return st;
@@ -411,6 +416,9 @@ function demoState(R){
     quests:{harp_quest:{song_hymn_joy_completions:3, song_frere_jacques_completions:2, song_amazing_grace_completions:1, song_brahms_completions:0}},
     events:{easter:{chocolate_level:4, rabbits:Object.fromEntries(Array.from({length:310}, (_, i) => ["r" + i, 1]))}},
   };
+  st.raw.dungeons = {secrets:4120, selected_dungeon_class:"mage", dungeon_types:{catacombs:{tier_completions:{0:3,1:20,2:15,3:30,4:12,5:40,6:25,7:4}, best_score:{0:240,1:280,2:290,3:300,4:285,5:310,6:305,7:270}, fastest_time_s_plus:{5:251000, 6:298000}, fastest_time_s:{1:180000,2:205000,3:240000,4:310000,5:260000,6:330000,7:420000}}}};
+  st.raw.nether_island_player_data.abiphone.active_contacts = Array(19).fill("c");
+  st.garden = {garden_experience:23400, unlocked_plots_ids:Array(13).fill("p"), commission_data:{total_completed:412, unique_npcs_served:58}, crop_upgrade_levels:{WHEAT:9, CARROT_ITEM:7, POTATO_ITEM:5, SUGAR_CANE:9, MELON:4, PUMPKIN:6, NETHER_STALK:3}, resources_collected:{WHEAT:4.2e6, CARROT_ITEM:9.1e6, POTATO_ITEM:3.3e6, SUGAR_CANE:12.4e6, MELON:7.7e6, PUMPKIN:2.1e6, NETHER_STALK:1.4e6}, composter_data:{upgrades:{speed:12, multi_drop:10, fuel_cap:5, organic_matter_cap:5, cost_reduction:8}}};
   st.rawProfile = {community_upgrades:{upgrade_states:[{upgrade:"minion_slots", tier:3}, {upgrade:"island_size", tier:5}, {upgrade:"coins_allowance", tier:5}, {upgrade:"guests_count", tier:2}]}};
   const cxp = 1.9e6; st.cata = {xp:cxp, ...levelFrom(cxp, CATA_XP)};
   st.classes = ["healer","mage","berserk","archer","tank"].map(k => { const xp = rnd()*1.5e6; return {id:k, xp, ...levelFrom(xp, CATA_XP)}; });
@@ -459,6 +467,12 @@ function analyze(R, st){
   }
   const effTier = e => { const i = RARITIES.indexOf(e.tier); return recombIds.has(e.id) && i >= 0 && i < 6 ? RARITIES[i+1] : e.tier; };
   let mp = 0; for (const e of Object.values(ownedBest)) mp += MP[effTier(e)] || 0;
+  const mpExtra = [];
+  const heg = Object.values(ownedBest).find(e => /^HEGEMONY_ARTIFACT/.test(e.id)); if (heg) mpExtra.push(["Hegemony Artifact counts twice", MP[effTier(heg)] || 0]);
+  if (st.raw?.rift?.access?.consumed_prism) mpExtra.push(["Rift Prism", 11]);
+  const contacts = (st.raw?.nether_island_player_data?.abiphone?.active_contacts || []).length;
+  if (contacts && Object.values(ownedBest).some(e => /^ABICASE/.test(e.id))) mpExtra.push([`Abicase (${contacts} contacts)`, Math.floor(contacts / 2)]);
+  for (const [, v] of mpExtra) mp += v;
   const upgrades = [], missingFam = [];
   for (const [fk, list] of Object.entries(R.accessories.families)){
     const best = ownedBest[fk], top = list[list.length-1];
@@ -470,7 +484,7 @@ function analyze(R, st){
     } else missingFam.push({first:list[0], top, gainFirst:MP[list[0].tier]||0, gainTop:MP[top.tier]||0, size:list.length});
   }
   const famCount = Object.keys(R.accessories.families).length;
-  A.acc = {mp, families: famCount, ownedFamilies: Object.keys(ownedBest).length, upgrades: upgrades.filter(u => u.gain > 0), missing: missingFam,
+  A.acc = {mp, mpExtra, families: famCount, ownedFamilies: Object.keys(ownedBest).length, upgrades: upgrades.filter(u => u.gain > 0), missing: missingFam,
            unrecombed: Object.values(ownedBest).filter(e => !recombIds.has(e.id) && RARITIES.indexOf(e.tier) < 6)};
   A.acc.pct = pct(A.acc.ownedFamilies, famCount);
 
@@ -521,6 +535,7 @@ function priorities(st, A){
   areas.push({key:"combat", name:"Dungeons", pct:A.cataPct, tips:[
     `Catacombs <b>${st.cata.level}</b>${st.cata.maxed ? "" : ` — ${fmt(st.cata.toNext)} XP to level ${st.cata.level+1}`}.`,
   ]});
+  try { areas.push(...extraFocusAreas(st)); } catch(e){ console.warn(e); }
   areas.forEach(a => a.tips = a.tips.filter(Boolean));
   return areas.sort((a,b) => a.pct - b.pct);
 }
@@ -530,6 +545,7 @@ const NEU_BASE = "https://cdn.jsdelivr.net/gh/NotEnoughUpdates/NotEnoughUpdates-
 const WEEK = 7 * 86400e3;
 const NEU = {};            // id -> parsed item {name, recipes, req, wiki} or {missing:true}
 let NPC_IDX = null;        // id -> [{npc, island, coins, inputs, out}]
+let GARDENS = {};
 let PRICES = null;         // {bz:{id:price}, bin:{id:price}, t}
 const hyId = id => id.replace(/-(\d+)$/, ":$1");     // NEU "INK_SACK-3" -> Hypixel "INK_SACK:3"
 const neuFile = id => id.replace(/:(\d+)$/, "-$1");
@@ -2154,6 +2170,8 @@ const SLAYER_SHARDS = {
 };
 // Items guides call out as the main reason to level each slayer
 const SLAYER_KEY = new Set("REVENANT_CHESTPLATE REVENANT_LEGGINGS REVENANT_BOOTS REAPER_SWORD ZOMBIE_RING ZOMBIE_ARTIFACT DEVOUR_RING REAPER_ORB WAND_OF_ATONEMENT WARDEN_HELMET AXE_OF_THE_SHREDDED TARANTULA_HELMET TARANTULA_CHESTPLATE TARANTULA_LEGGINGS TARANTULA_BOOTS SPIDER_RING SPIDER_ARTIFACT TARANTULA_TALISMAN SURVIVOR_CUBE SCORPION_FOIL THE_PRIMORDIAL RED_CLAW_TALISMAN RED_CLAW_RING RED_CLAW_ARTIFACT HUNTER_TALISMAN HUNTER_RING MANA_FLUX_POWER_ORB OVERFLUX_POWER_ORB POOCH_SWORD SOULFLOW_PILE SOULFLOW_BATTERY SOULFLOW_SUPERCELL HANDY_BLOOD_CHALICE POCKET_ESPRESSO_MACHINE ENDER_RELIC FINAL_DESTINATION_HELMET FINAL_DESTINATION_CHESTPLATE FINAL_DESTINATION_LEGGINGS FINAL_DESTINATION_BOOTS ATOMSPLIT_KATANA JUJU_SHORTBOW TERMINATOR GYROKINETIC_WAND ETHERWARP_CONDUIT BURSTSTOPPER_TALISMAN BURSTSTOPPER_ARTIFACT HEARTMAW_DAGGER HEARTFIRE_DAGGER DEMONLORD_GAUNTLET DESTRUCTION_CLOAK ANNIHILATION_CLOAK VAMPIRE_DENTIST_RELIC GARLIC_FLAVORED_GUMMY_BEAR SILVERTWIST_KARAMBIT".split(" "));
+// owned = carried, stored, worn, in the wardrobe, or donated to the museum
+const owns = (st, id) => !!(st.items?.[id] || st.museumOwned?.has(id));
 const ARMOR_PIECE = /_(HELMET|CHESTPLATE|LEGGINGS|BOOTS|MASK)$|^(HELMET|CHESTPLATE|LEGGINGS|BOOTS)_OF_THE_/;
 // Every item with a slayer level requirement, from Hypixel's item list. Armor pieces are grouped into sets.
 function slayerGear(st){
@@ -2176,10 +2194,10 @@ function slayerGear(st){
     }
     for (const r of rows){
       if (r.names?.length === 1) r.name = r.names[0];
-      r.own = r.ids.filter(id => st.items?.[id]).length;
+      r.own = r.ids.filter(id => owns(st, id)).length;
       r.owned = r.own === r.ids.length;
-      r.cost = r.ids.filter(id => !st.items?.[id]).reduce((a, id) => a + (mktPrice(id) || 0), 0);
-      r.priced = r.ids.filter(id => !st.items?.[id]).every(id => mktPrice(id));
+      r.cost = r.ids.filter(id => !owns(st, id)).reduce((a, id) => a + (mktPrice(id) || 0), 0);
+      r.priced = r.ids.filter(id => !owns(st, id)).every(id => mktPrice(id));
     }
     rows.sort((a, b) => a.lvl - b.lvl || b.key - a.key || a.name.localeCompare(b.name));
     out[boss] = rows;
@@ -2194,7 +2212,7 @@ function slayerGearHTML(st, rows, s, opts = {}){
     ${rows.map(r => `<tr data-owned="${r.owned ? 1 : 0}" data-key="${r.key ? 1 : 0}"${r.owned ? ' style="opacity:.6"' : ""}><td>${r.key ? "⭐ " : ""}${esc(r.name)}${r.ids.length > 1 ? `<span class="muted small"> (${r.ids.length} pieces)</span>` : ""}<div class="muted small">${SL_CAT[r.cat]}${opts.boss ? ` · ${esc(opts.boss)}` : ""}</div></td>
       <td>${s.level >= r.lvl ? '<span class="good">✓</span>' : ""} ${esc(SLAYER_INFO[s.id].short)} ${r.lvl}</td><td>${status(r)}</td>
       <td class="small">${r.owned ? "" : r.cost ? `${r.priced ? "" : "≥ "}${fmt(r.cost)}` : '<span class="muted">craft / no price</span>'}</td>
-      <td class="small" style="white-space:nowrap">${r.owned ? "" : acts(r.ids.filter(id => !st.items?.[id]), r.name)}</td></tr>`).join("")}
+      <td class="small" style="white-space:nowrap">${r.owned ? "" : acts(r.ids.filter(id => !owns(st, id)), r.name)}</td></tr>`).join("")}
     </tbody></table>`;
 }
 function slayerShardRows(S, an, list){
@@ -2252,7 +2270,7 @@ async function fillSlayers(){
       <div class="cols2" style="margin-top:14px">
         <div><h3 class="ph">🎯 Can get now <span class="muted">(${canGet.length})</span></h3>
           <p class="muted small">You meet the slayer level but don't own it. ⭐ = what guides level that slayer for. Cheapest first.</p>
-          <div class="card"><table data-limit="8"><tbody>${canGet.map(({r, s}) => `<tr><td>${r.key ? "⭐ " : ""}${esc(r.name)}<div class="muted small">${SL_CAT[r.cat]} · ${esc(SLAYER_INFO[s.id].short)} ${r.lvl}</div></td><td class="small">${r.cost ? fmt(r.cost) : '<span class="muted">—</span>'}</td><td class="small" style="white-space:nowrap">${acts(r.ids.filter(id => !st.items?.[id]), r.name)}</td></tr>`).join("") || `<tr><td class="muted">Nothing: you own everything you can use.</td></tr>`}</tbody></table></div></div>
+          <div class="card"><table data-limit="8"><tbody>${canGet.map(({r, s}) => `<tr><td>${r.key ? "⭐ " : ""}${esc(r.name)}<div class="muted small">${SL_CAT[r.cat]} · ${esc(SLAYER_INFO[s.id].short)} ${r.lvl}</div></td><td class="small">${r.cost ? fmt(r.cost) : '<span class="muted">—</span>'}</td><td class="small" style="white-space:nowrap">${acts(r.ids.filter(id => !owns(st, id)), r.name)}</td></tr>`).join("") || `<tr><td class="muted">Nothing: you own everything you can use.</td></tr>`}</tbody></table></div></div>
         <div><h3 class="ph">🔓 Unlocks at your next level <span class="muted">(${nextUnlocks.length})</span></h3>
           <p class="muted small">What one more level in each slayer gets you.</p>
           <div class="card"><table data-limit="8"><tbody>${nextUnlocks.map(({r, s}) => { const n = slayerToNext(s); return `<tr><td>${r.key ? "⭐ " : ""}${esc(r.name)}<div class="muted small">${SL_CAT[r.cat]}</div></td><td class="small">${esc(SLAYER_INFO[s.id].short)} ${r.lvl}<div class="muted">${n ? `≈ ${fmt(n.n)} × T${n.tier}` : ""}</div></td></tr>`; }).join("") || `<tr><td class="muted">Nothing new at the next levels.</td></tr>`}</tbody></table></div></div>
@@ -2432,7 +2450,7 @@ function skillExtraHTML(st, id){
       ${statCard("Farming level cap", pk.farming_level_cap != null ? `+${pk.farming_level_cap}/10` : "—", "Anita upgrade: Farming above 50", pk.farming_level_cap != null ? pk.farming_level_cap * 10 : null)}
       ${statCard("Medals", j.medals_inv ? `${md.gold || 0}🥇 ${md.silver || 0}🥈 ${md.bronze || 0}🥉` : "—", "unspent", null)}
       ${statCard("Contests", j.contests ? fmt(Object.keys(j.contests).length) : "—", j.unique_brackets ? `${Object.keys(j.unique_brackets).length} bracket types reached` : "", null)}
-    </div><p class="muted small">Garden level, visitors, plots and crop milestones come from a separate Garden API that this tracker doesn't load yet.</p>`;
+    </div>${gardenHTML(st)}`;
   }
   if (id === "FISHING"){
     const t = me.trophy_fish; if (!t) return `<h3 class="ph">🏆 Trophy Fish</h3><p class="muted small">No Trophy Fish data in your profile.</p>`;
@@ -2999,6 +3017,86 @@ document.addEventListener("change", e => {
   render();
 });
 
+// ---------- Garden (separate Hypixel endpoint) ----------
+// Level table from the wiki's Garden page (max level 15); 24 plots around the barn.
+const GARDEN_XP = [0, 70, 140, 280, 520, 1120, 2620, 4620, 7120, 10120, 20120, 30120, 40120, 50120, 60120];
+const GARDEN_CROPS = ["WHEAT", "CARROT_ITEM", "POTATO_ITEM", "PUMPKIN", "SUGAR_CANE", "MELON", "CACTUS", "INK_SACK:3", "MUSHROOM_COLLECTION", "NETHER_STALK", "DOUBLE_PLANT", "MOONFLOWER", "WILD_ROSE"];
+function gardenHTML(st){
+  const g = st.garden;
+  if (!g) return `<h3 class="ph">🌱 Garden</h3><p class="muted small">No Garden data${st.demo ? "" : " (the Garden request failed, or you haven't unlocked the Garden)"}.</p>`;
+  const xp = g.garden_experience || 0, lvl = GARDEN_XP.filter(t => xp >= t).length, next = GARDEN_XP[lvl];
+  const plots = (g.unlocked_plots_ids || []).length;
+  const cd = g.commission_data || {}, served = cd.total_completed ?? Object.values(cd.completed || {}).reduce((a, b) => a + b, 0), unique = cd.unique_npcs_served ?? Object.keys(cd.completed || {}).length;
+  const ups = g.crop_upgrade_levels || {}, comp = dig(g, "composter_data.upgrades") || {};
+  const res = g.resources_collected || {};
+  const cropName = id => id === "MUSHROOM_COLLECTION" ? "Mushroom" : id === "DOUBLE_PLANT" ? "Sunflower" : nameOf(id);
+  return `<h3 class="ph">🌱 Garden</h3><div class="grid compact">
+      ${statCard("Garden level", `${lvl}/15`, next ? `${fmt(xp - GARDEN_XP[lvl - 1])}/${fmt(next - GARDEN_XP[lvl - 1])} XP to ${lvl + 1}` : "Max level", next ? pct(xp - GARDEN_XP[lvl - 1], next - GARDEN_XP[lvl - 1]) : 100)}
+      ${statCard("Plots", `${plots}/24`, "unlocked", pct(plots, 24))}
+      ${statCard("Visitors served", fmt(served), `${unique} different visitors`, null)}
+      ${statCard("Crop upgrades", `${Object.values(ups).reduce((a, b) => a + b, 0)}`, `levels across ${Object.keys(ups).length} crops`, null)}
+    </div>
+    <div class="cols2"><div><div class="card"><table data-limit="8"><thead><tr><th>Crop</th><th>Upgrade</th><th>Harvested on the Garden</th></tr></thead><tbody>
+      ${GARDEN_CROPS.filter(c => res[c] || ups[c]).map(c => `<tr><td>${esc(cropName(c))}</td><td>${ups[c] || 0}/9</td><td>${fmt(res[c] || 0)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">No crop data.</td></tr>`}
+      </tbody></table></div></div>
+      <div><div class="card"><table><thead><tr><th>Composter upgrade</th><th>Level</th></tr></thead><tbody>
+      ${Object.entries(comp).map(([k, v]) => `<tr><td>${esc(prettyKey(k))}</td><td>${v}</td></tr>`).join("") || `<tr><td class="muted">No composter data.</td></tr>`}
+      </tbody></table></div>
+      <p class="muted small">Garden level table from the wiki (15 levels). Crop milestones and visitor rarities need more data than this view shows.</p></div></div>`;
+}
+
+// ---------- Dungeons extras: secrets, class average, best runs ----------
+function dungeonExtrasHTML(st){
+  const d = (st.raw || {}).dungeons || {}, cat = dig(d, "dungeon_types.catacombs") || {};
+  const classAvg = st.classes.length ? st.classes.reduce((a, c) => a + c.level + (c.maxed ? 0 : c.progress), 0) / st.classes.length : null;
+  const runs = Object.values(cat.tier_completions || {}).filter(v => typeof v === "number").reduce((a, b) => a + b, 0);
+  const floors = Object.keys(cat.tier_completions || {}).filter(k => /^\d+$/.test(k));
+  const t = ms => ms ? `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}` : "—";
+  return `<div class="grid compact" style="margin-top:12px">
+      ${statCard("Class average", classAvg != null ? classAvg.toFixed(2) : "—", "of your 5 classes", classAvg != null ? pct(classAvg, 50) : null)}
+      ${statCard("Secrets found", d.secrets != null ? fmt(d.secrets) : "—", runs ? `≈ ${(d.secrets / runs || 0).toFixed(1)} per run` : "", null)}
+      ${statCard("Selected class", d.selected_dungeon_class ? prettyKey(d.selected_dungeon_class) : "—", "", null)}
+    </div>
+    ${floors.length ? `<div class="card" style="margin-top:12px"><table><thead><tr><th>Floor</th>${floors.map(k => `<th>${k === "0" ? "Entrance" : "F" + k}</th>`).join("")}</tr></thead><tbody>
+      <tr><td>Best score</td>${floors.map(k => `<td>${cat.best_score?.[k] ?? "—"}</td>`).join("")}</tr>
+      <tr><td>Fastest S+</td>${floors.map(k => `<td>${t(cat.fastest_time_s_plus?.[k])}</td>`).join("")}</tr>
+      <tr><td>Fastest S</td>${floors.map(k => `<td>${t(cat.fastest_time_s?.[k])}</td>`).join("")}</tr>
+    </tbody></table></div>` : ""}`;
+}
+
+// ---------- Focus areas for the newer tabs ----------
+function extraFocusAreas(st){
+  const areas = [], me = st.raw || {};
+  if ((st.pets || []).length){
+    const D = petData(st), uniq = Object.keys(D.best).length;
+    areas.push({key:"pets", name:"Pets", pct:pct(uniq, PET_LIST.length), tips:[
+      `Pet Score <b>${D.score}</b>${D.nextMs ? `: ${D.nextMs[0] - D.score} more for +${D.nextMs[1]} Magic Find` : " (all milestones)"}.`,
+      `${D.missing.length} pets you don't own yet. See Pets → Pet Score for the cheapest points.`]});
+  }
+  const hx = me.mining_core?.experience ?? dig(me, "skill_tree.experience.mining");
+  if (hx != null){
+    const tier = HOTM_XP.filter(t => hx >= t).length, next = HOTM_XP[tier];
+    areas.push({key:"mining", name:"Heart of the Mountain", pct:Math.round((tier - 1 + (next ? (hx - HOTM_XP[tier - 1]) / (next - HOTM_XP[tier - 1]) : 0)) / 9 * 1000) / 10, tips:[
+      next ? `HotM tier <b>${tier}</b>: ${fmt(next - hx)} XP to tier ${tier + 1}. Do your 4 daily commissions for the +900 bonus each.` : "HotM is maxed."]});
+  }
+  const h = hotfFromProfile(st.hotfSrc);
+  if (h.xp != null){
+    const tier = HOTF_TIERS.filter(t => h.xp >= t[0]).length;
+    areas.push({key:"foraging", name:"Heart of the Forest", pct:pct(tier, HOTF_TIERS.length), tips:[`HotF tier <b>${tier}</b>/${HOTF_TIERS.length}. Do the 3 daily Starlyn contests.`]});
+  }
+  const r = me.rift;
+  if (r){
+    const souls = (dig(r, "enigma.found_souls") || []).length, charms = (dig(r, "gallery.secured_trophies") || []).length, cats = (dig(r, "dead_cats.found_cats") || []).length;
+    areas.push({key:"rift", name:"Rift", pct:Math.round((souls / 52 + charms / 8 + cats / 9) / 3 * 1000) / 10, tips:[
+      `Enigma Souls <b>${souls}/52</b>, Timecharms <b>${charms}/8</b>, Montezuma pieces <b>${cats}/9</b>.`]});
+  }
+  if (st.garden){
+    const xp = st.garden.garden_experience || 0, lvl = GARDEN_XP.filter(t => xp >= t).length, plots = (st.garden.unlocked_plots_ids || []).length;
+    areas.push({key:"skills", name:"Garden", pct:Math.round((lvl / 15 + plots / 24) / 2 * 1000) / 10, tips:[`Garden level <b>${lvl}/15</b>, plots <b>${plots}/24</b>. See Skills → Farming.`]});
+  }
+  return areas;
+}
+
 // ---------- Kuudra (shown in the Dungeons tab) ----------
 function kuudraHTML(st){
   const k = dig(st.raw || {}, "nether_island_player_data.kuudra_completed_tiers");
@@ -3013,7 +3111,10 @@ function kuudraHTML(st){
 function snapshot(st, A){
   return {t: Date.now(), sbLevel: +st.sbLevel.toFixed(2), skillAvg: +A.skillAvg.toFixed(2), museum: A.museum.have, mp: A.acc.mp,
           accFam: A.acc.ownedFamilies, collTiers: A.coll.tiers, cata: +(st.cata.level + (st.cata.maxed?0:st.cata.progress)).toFixed(2),
-          slayerXp: Math.round(st.slayers.reduce((a,s)=>a+s.xp,0))};
+          slayerXp: Math.round(st.slayers.reduce((a,s)=>a+s.xp,0)), slayerLv: st.slayers.reduce((a, s) => a + s.level, 0),
+          petScore: (st.pets || []).length ? petData(st).score : null,
+          hotm: (() => { const x = st.raw?.mining_core?.experience ?? st.raw?.skill_tree?.experience?.mining; if (x == null) return null; const t = HOTM_XP.filter(v => x >= v).length, n = HOTM_XP[t]; return +(t + (n ? (x - HOTM_XP[t - 1]) / (n - HOTM_XP[t - 1]) : 0)).toFixed(2); })(),
+          riftSouls: st.raw?.rift ? (st.raw.rift.enigma?.found_souls || []).length : null};
 }
 function saveHistory(key, snap){
   const h = store.get("hist:" + key, []);
@@ -3235,7 +3336,7 @@ function viewAcc(st, A){
     ${miss.map(m => `<tr><td>${rar(m.first.tier, m.first.name)}<div>${acts([m.first.id], m.first.name)}</div></td><td>${m.gainFirst}</td><td>${m.size > 1 ? rar(m.top.tier, m.top.name) + `<div>${acts([m.top.id], m.top.name)}</div>` : '<span class="muted">—</span>'}</td><td>${m.size > 1 ? m.gainTop : ""}</td></tr>`).join("")}
     </tbody></table></div>`;
   return `<div class="grid compact">
-    ${statCard("Magical power (est.)", C.mp, st.mpReported ? `In-game best: ${st.mpReported}` : "Excludes Hegemony, Abiphone and rift bonuses", null)}
+    ${statCard("Magical power (est.)", C.mp, `${C.mpExtra?.length ? "incl. " + C.mpExtra.map(([n, v]) => `${n} +${v}`).join(", ") + ". " : ""}${st.mpReported ? `In-game best: ${st.mpReported}` : "Enrichments not counted"}`, null)}
     ${statCard("Families owned", `${C.ownedFamilies}/${C.families}`, `${C.pct}%`, C.pct)}
     ${statCard("Upgrades available", ups.length, `+${ups.reduce((a,u)=>a+u.gain,0)} MP if all upgraded one step`, null)}
     ${statCard("Not recombobulated", C.unrecombed.length, "each recomb = one rarity higher", null)}
@@ -3387,6 +3488,9 @@ Object.assign(RARE_DROPS, {
 });
 // Slayer boss rare drops from the wiki: [tier the chances are for, drops]. Revenant's page only gives weights, not chances.
 const SLAYER_DROPS = {
+  // Revenant: the wiki only gives weights. Chance ≈ weight / 4000 for Tier 5, calibrated so Festering Maggot (weight 20)
+  // matches its 0.5% chance on the wiki's Festering Maggot page. Treat these as estimates.
+  zombie:[5, [["Warden Heart", 2 / 4000], ["Severed Hand", 7 / 4000], ["Shredded Sinew", 8 / 4000], ["Scythe Blade", 15 / 4000], ["Beheaded Horror", 20 / 4000], ["Festering Maggot", 20 / 4000], ["Smite VI book", 50 / 4000], ["Revenant Catalyst", 125 / 4000], ["Paragon Shard", 0.005]], true],
   spider:[5, [["Primordial Eye", 0.00014], ["Ensnared Snail", 0.00042], ["Digested Mosquito", 0.00071], ["Shriveled Wasp", 0.0014], ["Vial of Venom", 0.0014], ["Tarantula Talisman", 0.0021], ["Fly Swatter", 0.0021], ["Bane of Arthropods VI", 0.0035], ["Tarantula Catalyst", 0.0042], ["Darkness Within Rune", 0.0066], ["Paragon Shard", 0.005], ["Brick Red Dye", 0.000004]]],
   wolf:[4, [["Overflux Capacitor", 0.0004], ["Grizzly Salmon", 0.0006], ["Red Claw Egg", 0.0012], ["Couture Rune I", 0.0024], ["Critical VI book", 0.0081], ["Furball", 0.0162], ["Paragon Shard", 0.0025], ["Celeste Dye", 0.000002]]],
   enderman:[4, [["Ender Slayer VII (End Stone Idol)", 0.00014], ["Exceedingly Rare Ender Artifact Upgrade", 0.00028], ["Enchant Rune", 0.00046], ["Judgement Core", 0.00056], ["Void Conqueror skin", 0.0017], ["Handy Blood Chalice", 0.0018], ["Pocket Espresso Machine", 0.0039], ["Etherwarp Merger", 0.0042], ["Sinful Dice", 0.0046], ["Summoning Eye", 0.0056], ["End Rune", 0.0066], ["Hazmat Enderman", 0.0155], ["Smarty Pants book", 0.0176], ["Transmission Tuner", 0.0212], ["Paragon Shard", 0.0025], ["Byzantium Dye", 0.000002]]],
@@ -3396,12 +3500,12 @@ const SLAYER_DROPS = {
 function slayerDropsHTML(st, s){
   const d = SLAYER_DROPS[s.id];
   if (!d) return `<h3 class="ph">🎲 Rare drops</h3><p class="muted small">The wiki's ${esc(s.name)} page lists drop weights rather than chances, so they can't be converted to odds yet.</p>`;
-  const [tier, list] = d, tries = (s.kills || [])[tier - 1] || 0;
+  const [tier, list, estimated] = d, tries = (s.kills || [])[tier - 1] || 0;
   const ev = needMarket() ? dropEV(st, list) : null;
   return `<h3 class="ph">🎲 Rare drops <span class="muted small">(Tier ${tier}, rarest first)</span></h3>${dropControls(st)}
     ${ev ? `<p class="small">💰 Rare drops are worth about <b>${fmt(ev.ev)} coins per Tier ${tier} boss</b> on average at today's prices (${ev.priced} of ${list.length} drops have a price). Add the guaranteed drops and subtract the quest cost to get your profit.</p>` : ""}
     <div class="card"><div class="small" style="columns:2 320px">${list.map(([n, b, p, mf]) => dropLine(st, n, b, {pet:p, mf, tries})).join("")}</div>
-    <p class="muted small" style="margin:6px 0 0">Chances from the wiki for Tier ${tier}. "By your kills" uses your ${fmt(tries)} Tier ${tier} kills. Slayer RNG Meter progress isn't counted, so real odds are better. Some drops also need a minimum slayer level.</p></div>`;
+    <p class="muted small" style="margin:6px 0 0">${estimated ? "<b>Estimated</b> from the wiki's drop weights (it lists no percentages for this boss). " : ""}Chances from the wiki for Tier ${tier}. "By your kills" uses your ${fmt(tries)} Tier ${tier} kills. Slayer RNG Meter progress isn't counted, so real odds are better. Some drops also need a minimum slayer level.</p></div>`;
 }
 
 // Kills and bestiary progress for rare mobs (Scatha, Jawbus, Inquisitor…), plus whether you own their pet
@@ -3549,6 +3653,7 @@ function viewCombat(st){
     <tr><td>Completions</td>${floors.map(([,v]) => `<td>${fmt(v)}</td>`).join("")}</tr>
     ${mm.length ? `<tr><td>Master mode</td>${floors.map(([k]) => `<td>${st.mmFloors[k] ? fmt(st.mmFloors[k]) : "—"}</td>`).join("")}</tr>` : ""}
   </tbody></table>${floors.length ? "" : '<div class="muted">No dungeon runs recorded.</div>'}</div></div>
+  ${dungeonExtrasHTML(st)}
   ${kuudraHTML(st)}
   ${needMarket() ? essenceMoneyHTML(st) : ""}`;
 }
@@ -3559,10 +3664,10 @@ function viewHistory(){
   return histTable(h);
 }
 function histTable(h){
-  const cols = [["sbLevel","SB level",2],["skillAvg","Skill avg",2],["museum","Museum",0],["mp","MP",0],["accFam","Acc. families",0],["collTiers","Coll. tiers",0],["cata","Catacombs",2],["slayerXp","Slayer XP",0]];
+  const cols = [["sbLevel","SB level",2],["skillAvg","Skill avg",2],["museum","Museum",0],["mp","MP",0],["accFam","Acc. families",0],["collTiers","Coll. tiers",0],["cata","Catacombs",2],["slayerXp","Slayer XP",0],["slayerLv","Slayer lvls",0],["petScore","Pet score",0],["hotm","HotM",2],["riftSouls","Enigma souls",0]];
   const rows = h.slice().reverse();
   return `<div class="card"><table><thead><tr><th>Date</th>${cols.map(c => `<th>${c[1]}</th>`).join("")}</tr></thead><tbody>
-  ${rows.map((r,i) => { const prev = rows[i+1]; return `<tr><td>${new Date(r.t).toLocaleString()}</td>${cols.map(([k,,d]) => { const dv = prev ? r[k]-prev[k] : 0; return `<td>${k==="slayerXp"?fmt(r[k]):(+r[k]).toFixed(d)}${dv ? `<span class="delta ${dv>0?"up":"down"}">${dv>0?"+":""}${k==="slayerXp"?fmt(dv):dv.toFixed(d)}</span>` : ""}</td>`; }).join("")}</tr>`; }).join("")}
+  ${rows.map((r,i) => { const prev = rows[i+1]; return `<tr><td>${new Date(r.t).toLocaleString()}</td>${cols.map(([k,,d]) => { if (r[k] == null) return '<td class="muted">—</td>'; const dv = prev && prev[k] != null ? r[k]-prev[k] : 0; return `<td>${k==="slayerXp"?fmt(r[k]):(+r[k]).toFixed(d)}${dv ? `<span class="delta ${dv>0?"up":"down"}">${dv>0?"+":""}${k==="slayerXp"?fmt(dv):dv.toFixed(d)}</span>` : ""}</td>`; }).join("")}</tr>`; }).join("")}
   </tbody></table></div>`;
 }
 
@@ -3588,7 +3693,7 @@ async function loadPlayer(){
     const sel = $("#profile"); const remembered = store.get("profile:" + UUID);
     sel.innerHTML = PROFILES.map(x => `<option value="${esc(x.profile_id)}">${esc(x.cute_name)}${x.game_mode ? " (" + esc(x.game_mode) + ")" : ""}${x.selected ? " ★" : ""}</option>`).join("");
     sel.value = PROFILES.find(x => x.profile_id === remembered) ? remembered : (PROFILES.find(x => x.selected) || PROFILES[0]).profile_id;
-    MUSEUMS = {};
+    MUSEUMS = {}; GARDENS = {};
     await showProfile();
   } catch(e){
     console.error(e);
@@ -3605,8 +3710,10 @@ async function showProfile(){
   try {
     status("Fetching museum…");
     if (!(id in MUSEUMS)) { try { MUSEUMS[id] = await getJSON(`${API}/skyblock/museum?profile=${id}`, key); } catch(e){ console.warn(e); MUSEUMS[id] = null; } }
+    if (!(id in GARDENS)) { try { GARDENS[id] = (await getJSON(`${API}/skyblock/garden?profile=${id}`, key)).garden || null; } catch(e){ console.warn(e); GARDENS[id] = null; } }
     status("Reading inventories…");
     const st = await buildState(RES, prof, MUSEUMS[id], UUID);
+    st.garden = GARDENS[id];
     const A = analyze(RES, st);
     const hist = saveHistory(UUID + ":" + id, snapshot(st, A));
     CUR = {st, A, hist};
