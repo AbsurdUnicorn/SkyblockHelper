@@ -1,0 +1,42 @@
+name: Record prices
+
+# Every hour: take a Bazaar + lowest BIN snapshot and update the 3- and 7-day averages
+# on the "data" branch, which the app reads from raw.githubusercontent.com.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prices
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - name: Check out the data branch (create it the first time)
+        run: |
+          git clone --depth 1 --branch data "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data \
+            || (mkdir data && cd data && git init -b data && git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git")
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Record prices
+        run: node app/scripts/update-prices.mjs data
+      - name: Commit
+        working-directory: data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history.json avg.json
+          git commit -m "Price snapshot $(date -u +%Y-%m-%dT%H:%MZ)" || exit 0
+          # keep the branch small: squash to a single commit
+          git checkout --orphan tmp && git commit -m "Prices $(date -u +%Y-%m-%dT%H:%MZ)" && git branch -D data 2>/dev/null; git branch -m data
+          git push --force origin data

@@ -130,6 +130,7 @@ details summary{cursor:pointer;padding:4px 0}
   <input id="recipeSearch" list="itemNames" placeholder="🔍 Look up a recipe…" title="Type an item name and press Enter">
   <datalist id="itemNames"></datalist>
   <span id="status" class="muted small"></span>
+  <select id="priceMode" title="Which prices every calculation uses"><option value="live">💲 Live prices</option><option value="avg3">💲 3-day average</option><option value="avg7">💲 7-day average</option></select>
   <button id="installApp" class="ghost" hidden title="Install as an app with its own window and desktop icon">⬇ Install app</button>
 </header>
 <main>
@@ -536,6 +537,49 @@ const WEEK = 7 * 86400e3;
 const NEU = {};            // id -> parsed item {name, recipes, req, wiki} or {missing:true}
 let NPC_IDX = null;        // id -> [{npc, island, coins, inputs, out}]
 let PRICES = null;         // {bz:{id:price}, bin:{id:price}, t}
+// ---------- price averages ----------
+// An hourly GitHub Action (.github/workflows/prices.yml) records Bazaar and lowest-BIN prices and publishes
+// 3- and 7-day averages on the repo's "data" branch. PRICE_MODE picks what every calculation uses:
+// "live" (right now), "avg3" or "avg7". The live value is always kept so both can be shown.
+const AVG_URL = "https://raw.githubusercontent.com/AbsurdUnicorn/SkyblockHelper/data/avg.json";
+let AVG = null, PRICE_MODE = store.get("priceMode", "live");
+async function loadAvg(){
+  if (AVG && Date.now() - AVG.fetched < 30 * 60e3) return AVG;
+  try { const j = await fetch(AVG_URL + "?t=" + Math.floor(Date.now() / 300e3), {cache:"no-store"}).then(r => r.ok ? r.json() : null); if (j) AVG = {...j, fetched:Date.now()}; }
+  catch {}
+  return AVG;
+}
+const avgIdx = () => PRICE_MODE === "avg7" ? 1 : 0;
+// average for one item: {bid, ask} for Bazaar items, {bin} for auction items, or null
+function avgOf(id){
+  if (!AVG) return null;
+  const b = AVG.bz?.[id]; if (b) return PRICE_MODE === "avg7" ? {bid:b[2], ask:b[3]} : {bid:b[0], ask:b[1]};
+  const a = AVG.bin?.[id]; if (a) return {bin:a[avgIdx()]};
+  return null;
+}
+// small "live vs average" note shown next to prices: the other number and how far apart they are
+function priceNote(id, kind = "bid"){
+  const live = BZFULL?.live?.[id] || null, liveBin = PRICES?.liveBin?.[id] ?? null;
+  const b = AVG?.bz?.[id], a = AVG?.bin?.[id];
+  const nowV = live ? (kind === "ask" ? live.ask : live.bid) : liveBin;
+  const avgV = b ? (kind === "ask" ? b[1] : b[0]) : a ? a[0] : null;
+  if (!nowV || !avgV) return "";
+  const d = (nowV - avgV) / avgV * 100, arrow = Math.abs(d) < 3 ? "≈" : d > 0 ? "▲" : "▼";
+  const col = Math.abs(d) < 3 ? "var(--muted)" : d > 0 ? "var(--good)" : "var(--bad)";
+  return `<div class="small" style="color:${col}" title="Live now vs. the ${AVG.days3}-day average">${PRICE_MODE === "live" ? `avg ${fmt(avgV)}` : `now ${fmt(nowV)}`} ${arrow}${Math.abs(d) >= 3 ? Math.abs(d).toFixed(0) + "%" : ""}</div>`;
+}
+function setPriceMode(m){
+  PRICE_MODE = m; store.set("priceMode", m);
+  PRICES = null; BZFULL = null; COST_CACHE = null; MONEY_CACHE = null; FARM_CACHE = null; if (typeof SHARDS !== "undefined") SHARDS.an = null;
+  Promise.all([loadPrices(), loadBazaarFull(true)]).finally(() => render());
+}
+function priceModeLabel(){
+  if (PRICE_MODE === "live" || !AVG) return "live prices";
+  const n = PRICE_MODE === "avg7" ? AVG.days7 : AVG.days3;
+  return `${n}-day average prices${n < (PRICE_MODE === "avg7" ? 7 : 3) ? ` (only ${n} day${n > 1 ? "s" : ""} recorded so far)` : ""}`;
+}
+
+
 const hyId = id => id.replace(/-(\d+)$/, ":$1");     // NEU "INK_SACK-3" -> Hypixel "INK_SACK:3"
 const neuFile = id => id.replace(/:(\d+)$/, "-$1");
 const stripMc = s => String(s || "").replace(/§./g, "");
@@ -610,10 +654,16 @@ async function loadPrices(){
   const [bz, bin] = await Promise.all([
     getJSON(API + "/skyblock/bazaar").catch(() => ({products:{}})),
     fetch("https://lb.tricked.dev/lowestbins").then(r => r.json()).catch(() => ({})),
+    loadAvg(),
   ]);
   const b = {};
   for (const [id, p] of Object.entries(bz.products || {})) if (p.quick_status?.buyPrice > 0) b[id] = p.quick_status.buyPrice;
-  return PRICES = {bz:b, bin, t:Date.now()};
+  const liveBin = {...bin};
+  if (PRICE_MODE !== "live" && AVG){
+    for (const id of Object.keys(b)){ const a = avgOf(id); if (a?.ask) b[id] = a.ask; }
+    for (const id of Object.keys(bin)){ const a = avgOf(id); if (a?.bin) bin[id] = a.bin; }
+  }
+  return PRICES = {bz:b, bin, liveBin, t:Date.now()};
 }
 // Fetch recipes for the targets and everything they're made from
 async function prepareCrafting(ids){
@@ -1043,7 +1093,7 @@ function recipeBody(id){
   if (npcs.length) parts.push(`<h4>Sold by NPCs</h4><table><tbody>${npcs.map(o => `<tr><td><b>${esc(o.npc)}</b> <span class="muted">${esc(island(o.island))}</span></td>
     <td>${o.coins ? fmt(o.coins) + " coins" : ""}${o.inputs.length ? (o.coins ? " + " : "") + o.inputs.map(([c, n]) => `<a href="#" data-recipe="${esc(c)}">${fmt(n)}× ${esc(nameOf(c))}</a>`).join(", ") : ""}</td>
     <td class="muted">${o.out > 1 ? "gives " + o.out : ""}</td></tr>`).join("")}</tbody></table>`);
-  const price = PRICES ? (PRICES.bz[id] ? `Bazaar: <b>${fmt(PRICES.bz[id])}</b> each` : PRICES.bin[id] ? `Lowest BIN on the AH: <b>${fmt(PRICES.bin[id])}</b>` : "") : "";
+  const price = PRICES ? (PRICES.bz[id] ? `Bazaar: <b>${fmt(PRICES.bz[id])}</b> each${priceNote(id, "ask")}` : PRICES.bin[id] ? `Lowest BIN on the AH: <b>${fmt(PRICES.bin[id])}</b>${priceNote(id)}` : "") : "";
   return `${d.req ? reqHTML(d.req, reqStatus(d.req)) : ""}
     ${price ? `<p class="small">${price}</p>` : ""}
     ${parts.join("") || `<div class="msg">${d.failed ? "The recipe couldn't be downloaded — check your connection and try again." : d.missing ? "This item isn't in the community recipe database." : "No crafting recipe or NPC shop found — it probably comes from a drop, reward or upgrade."} ${d.wiki ? "" : `Try the <a href="https://hypixelskyblock.minecraft.wiki/w/Special:Search?search=${encodeURIComponent(nameOf(id))}" target="_blank" rel="noopener">wiki</a>.`}</div>`}
@@ -1651,8 +1701,10 @@ async function loadBazaarFull(force){
     // sellPrice = highest buy order (what instant-sell pays / where a buy order goes)
     m[id] = {ask:q.buyPrice, bid:q.sellPrice, askVol:q.buyMovingWeek, bidVol:q.sellMovingWeek};
   }
+  const live = {}; for (const [id, v] of Object.entries(m)) live[id] = {ask:v.ask, bid:v.bid};
+  if (PRICE_MODE !== "live"){ await loadAvg(); for (const [id, v] of Object.entries(m)){ const a = avgOf(id); if (a?.bid && a?.ask){ v.ask = a.ask; v.bid = a.bid; } } }
   if (PRICES) for (const [id, v] of Object.entries(m)) if (v.ask > 0) PRICES.bz[id] = v.ask;  // keep the rest of the app in sync
-  return BZFULL = {m, t:Date.now(), updated:j.lastUpdated || Date.now()};
+  return BZFULL = {m, live, t:Date.now(), updated:j.lastUpdated || Date.now()};
 }
 const MONEY_DEF = {buy:"instant", sell:"offer", minVol:10000, tax:1.25, cap:50, sort:"daily", depth:3, speed:50, hours:2, minRate:0};
 // Cheapest way to get one of each shard: buy it, or fuse it from the cheapest inputs (which may themselves be fused).
@@ -2102,11 +2154,11 @@ async function fillForaging(){
         <p class="muted small">Player-reported figures from the Hypixel forums and money-making guides (2026). Logs alone pay little; the money is in rare drops and shards, so forage <b>Helix</b> for Helixis.</p></div>
       <div><h3 class="ph">Drops worth selling <span class="muted small">(live Bazaar)</span></h3>
         <div class="card"><table><thead><tr><th>Item</th><th>Instant sell</th><th>Sell offer</th></tr></thead><tbody>
-        ${itemRows.map(r => `<tr><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}${r.per ? ` · ≈ ${fmt(r.bid / r.per)} per log` : ""}</div></td><td>${fmt(r.bid * tax)}</td><td>${fmt(r.ask * tax)}</td></tr>`).join("")}
+        ${itemRows.map(r => `<tr><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}${r.per ? ` · ≈ ${fmt(r.bid / r.per)} per log` : ""}</div></td><td>${fmt(r.bid * tax)}${priceNote(r.id)}</td><td>${fmt(r.ask * tax)}</td></tr>`).join("")}
         </tbody></table></div></div></div>
       <h3 class="ph">Shards you get while foraging</h3>
       <div class="card"><table><thead><tr><th>Shard</th><th>From</th><th>Instant sell</th><th>Weekly volume</th></tr></thead><tbody>
-      ${shardDrops.map(x => `<tr><td>${shardName(x.s)}</td><td class="small">${x.w ? `📍 ${esc(x.w.place)} · ${esc(x.w.method)}` : ""}</td><td><b>${fmt(x.p.bid * tax)}</b></td><td class="muted small">${fmt(x.p.bidVol)}</td></tr>`).join("")}
+      ${shardDrops.map(x => `<tr><td>${shardName(x.s)}</td><td class="small">${x.w ? `📍 ${esc(x.w.place)} · ${esc(x.w.method)}` : ""}</td><td><b>${fmt(x.p.bid * tax)}</b>${priceNote(x.s.bz)}</td><td class="muted small">${fmt(x.p.bidVol)}</td></tr>`).join("")}
       </tbody></table></div>
       <p class="muted small">Chameleon from Fig and Mangrove tree gifts is the big one: always keep and sell it.</p>
       ${plans.length ? `<h3 class="ph">Shard fusions in foraging areas</h3>
@@ -2527,16 +2579,16 @@ async function fillMining(){
     const money = `<div class="cols2">
       <div><h3 class="ph">Gemstones right now <span class="muted small">(live Bazaar, Flawless)</span></h3>
         <div class="card"><table><thead><tr><th>Gem</th><th>Instant sell</th><th>Per rough</th></tr></thead><tbody>
-        ${gems.map((r, i) => `<tr${i === 0 ? ' style="background:rgba(76,195,138,.08)"' : ""}><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}</div></td><td>${fmt(r.bid * tax)}</td><td class="muted small">≈ ${(r.bid * tax / r.per).toFixed(1)} coins</td></tr>`).join("")}
+        ${gems.map((r, i) => `<tr${i === 0 ? ' style="background:rgba(76,195,138,.08)"' : ""}><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}</div></td><td>${fmt(r.bid * tax)}${priceNote(r.id)}</td><td class="muted small">≈ ${(r.bid * tax / r.per).toFixed(1)} coins</td></tr>`).join("")}
         </tbody></table></div>
         <p class="muted small">1 Flawless = 80 Fine = 6,400 Flawed = 512,000 Rough. Mine whichever gem is on top in an area you can reach; Glacite gems need the Glacite Tunnels.</p></div>
       <div><h3 class="ph">Other drops worth selling</h3>
         <div class="card"><table><thead><tr><th>Item</th><th>Instant sell</th><th>Sell offer</th></tr></thead><tbody>
-        ${itemRows.filter(r => !/FLAWLESS/.test(r.id)).sort((a, b) => b.bid - a.bid).map(r => `<tr><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}</div></td><td>${fmt(r.bid * tax)}</td><td>${fmt(r.ask * tax)}</td></tr>`).join("")}
+        ${itemRows.filter(r => !/FLAWLESS/.test(r.id)).sort((a, b) => b.bid - a.bid).map(r => `<tr><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}</div></td><td>${fmt(r.bid * tax)}${priceNote(r.id)}</td><td>${fmt(r.ask * tax)}</td></tr>`).join("")}
         </tbody></table></div></div></div>
       <h3 class="ph">Shards you get while mining</h3>
       <div class="card"><table data-limit="8"><thead><tr><th>Shard</th><th>From</th><th>Instant sell</th><th>Weekly volume</th></tr></thead><tbody>
-      ${shardDrops.map(x => `<tr><td>${shardName(x.s)}</td><td class="small">${x.w ? `📍 ${esc(x.w.place)} · ${esc(x.w.method)}` : ""}</td><td><b>${fmt(x.p.bid * tax)}</b></td><td class="muted small">${fmt(x.p.bidVol)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No valuable mining shards right now.</td></tr>`}
+      ${shardDrops.map(x => `<tr><td>${shardName(x.s)}</td><td class="small">${x.w ? `📍 ${esc(x.w.place)} · ${esc(x.w.method)}` : ""}</td><td><b>${fmt(x.p.bid * tax)}</b>${priceNote(x.s.bz)}</td><td class="muted small">${fmt(x.p.bidVol)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No valuable mining shards right now.</td></tr>`}
       </tbody></table></div>
       ${plans.length ? `<h3 class="ph">Shard fusions in mining areas</h3>
       <div class="card"><table><thead><tr><th>Farm</th><th>Buy</th><th>Make → sell offer</th><th>Realistic /hr</th></tr></thead><tbody>
@@ -2654,10 +2706,10 @@ function forgeHTML(st){
       <label class="chk"><input type="checkbox" id="forgeOnlyMine" ${hideReq ? "checked" : ""}> Only what my HotM tier can forge</label></div>
     <div class="card"><table data-limit="15"><thead><tr><th>Forge</th><th>Inputs (bought now)</th><th>Time</th><th>Profit</th><th>Per hour</th><th>Return</th></tr></thead><tbody>
     ${usable.map(r => `<tr${r.profit <= 0 ? ' style="opacity:.5"' : ""}><td><b>${r.count > 1 ? r.count + "× " : ""}${esc(nm(r.out))}</b>${r.req ? `<div class="muted small">${(tier || 0) >= r.req ? "" : "🔒 "}needs HotM ${r.req}</div>` : ""}${r.vol != null && r.vol < 1000 ? '<div class="small" style="color:var(--warn)">⚠ low volume</div>' : ""}</td>
-      <td class="small">${r.inputs.map(([id, n]) => `${fmt(n)}× ${esc(nm(id))}`).join(", ")}<div class="muted">cost ${fmt(r.cost)} → sells ${fmt(r.sell)}</div></td>
+      <td class="small">${r.inputs.map(([id, n]) => `${fmt(n)}× ${esc(nm(id))}`).join(", ")}<div class="muted">cost ${fmt(r.cost)} → sells ${fmt(r.sell)}</div>${/;/.test(r.out) ? "" : priceNote(r.out)}</td>
       <td>${dur(r.hours)}</td><td class="${r.profit > 0 ? "good" : "bad"}"><b>${r.profit > 0 ? "+" : ""}${fmt(r.profit)}</b></td><td>${r.profit > 0 ? fmt(r.perHr) : "—"}</td><td class="small">${r.cost ? Math.round(r.roi * 100) + "%" : "—"}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No priced forge recipes.</td></tr>`}
     </tbody></table></div>
-    <p class="muted small">${FORGE_RECIPES.length} forge recipes from the NEU repo, priced live: inputs at instant-buy / lowest BIN, output after Bazaar tax or ~2% AH fees. Times include your Quick Forge (${Math.round(cut * 100)}%). "Per hour" is per forge slot; long forges earn while you're offline, so profit per craft matters more if you only check in once a day. Recipes whose items have no price right now are left out.</p>`;
+    <p class="muted small">${FORGE_RECIPES.length} forge recipes from the NEU repo, priced with ${priceModeLabel()}: inputs at instant-buy / lowest BIN, output after Bazaar tax or ~2% AH fees. Times include your Quick Forge (${Math.round(cut * 100)}%). "Per hour" is per forge slot; long forges earn while you're offline, so profit per craft matters more if you only check in once a day. Recipes whose items have no price right now are left out.</p>`;
 }
 document.addEventListener("change", e => {
   const id = e.target.id;
@@ -2695,7 +2747,7 @@ function petFlipsHTML(st){
   rows.sort((a, b) => b.perM - a.perM);
   return `<h3 class="ph">💰 Pet levelling flips <span class="muted small">(lowest BIN)</span></h3>
     <div class="card"><table data-limit="12"><thead><tr><th>Pet</th><th>Buy (low level)</th><th>Sell at 100</th><th>Profit</th><th>Per 1M pet XP</th></tr></thead><tbody>
-    ${rows.map(r => `<tr><td><span style="color:${PET_COLOR[r.tier] || "inherit"}">${esc(prettyKey(r.tier))}</span> ${esc(petName(r.type))}</td><td>${fmt(r.lo)}</td><td>${fmt(r.hi)}</td><td class="good">+${fmt(r.profit)}</td><td><b>${fmt(r.perM)}</b><div class="muted small">${fmt(r.xp)} XP to 100</div></td></tr>`).join("") || `<tr><td colspan="5" class="muted">No price data.</td></tr>`}
+    ${rows.map(r => `<tr><td><span style="color:${PET_COLOR[r.tier] || "inherit"}">${esc(prettyKey(r.tier))}</span> ${esc(petName(r.type))}</td><td>${fmt(r.lo)}${priceNote(`PET-${r.type}-${r.tier}`)}</td><td>${fmt(r.hi)}${priceNote(`PET-${r.type}-${r.tier}-100`)}</td><td class="good">+${fmt(r.profit)}</td><td><b>${fmt(r.perM)}</b><div class="muted small">${fmt(r.xp)} XP to 100</div></td></tr>`).join("") || `<tr><td colspan="5" class="muted">No price data.</td></tr>`}
     </tbody></table></div>
     <p class="muted small">Buy the cheapest low-level copy, level it to 100 (EXP Share, Kat, pet XP items, or just playing with it) and sell it. Sorted by profit per million pet XP, because XP is the real cost. "Low level" is the cheapest listing of any level below 100, so check its level before buying.</p>`;
 }
@@ -2704,7 +2756,7 @@ const ENCHANT_ITEMS = [["TITANIC_EXP_BOTTLE", "Transcendent / Metaphysical exper
 function enchantingMoneyHTML(){
   const rows = ENCHANT_ITEMS.map(([id, note]) => ({id, note, m:mkt(id)})).filter(x => x.m);
   return rows.length ? `<h3 class="ph">💰 Experiment rewards worth selling</h3><div class="card"><table><tbody>
-    ${rows.map(x => `<tr><td>${esc(nameOf(x.id))}<div class="muted small">${esc(x.note)}</div></td><td>${fmt(x.m.sell)}</td><td class="muted small">${x.m.src}</td></tr>`).join("")}</tbody></table></div>
+    ${rows.map(x => `<tr><td>${esc(nameOf(x.id))}<div class="muted small">${esc(x.note)}</div></td><td>${fmt(x.m.sell)}${priceNote(x.id)}</td><td class="muted small">${x.m.src}</td></tr>`).join("")}</tbody></table></div>
     <p class="muted small">Daily experiments are free money: sell the bottles and book rewards you don't need.</p>` : "";
 }
 // Essence you're holding (Dungeons tab / Upgrades)
@@ -2715,7 +2767,7 @@ function essenceMoneyHTML(st){
   if (!rows.length) return "";
   const total = rows.reduce((a, x) => a + x.n * x.m.sell, 0);
   return `<div class="section"><h2>💰 Essence</h2><div class="card"><table><thead><tr><th>Essence</th><th>Price each</th><th>You have</th><th>Worth</th></tr></thead><tbody>
-    ${rows.sort((a, b) => b.n * b.m.sell - a.n * a.m.sell).map(x => `<tr><td>${esc(prettyKey(x.k))}</td><td>${fmt(x.m.sell)}</td><td>${fmt(x.n)}</td><td><b>${fmt(x.n * x.m.sell)}</b></td></tr>`).join("")}
+    ${rows.sort((a, b) => b.n * b.m.sell - a.n * a.m.sell).map(x => `<tr><td>${esc(prettyKey(x.k))}</td><td>${fmt(x.m.sell)}${priceNote("ESSENCE_" + x.k)}</td><td>${fmt(x.n)}</td><td><b>${fmt(x.n * x.m.sell)}</b></td></tr>`).join("")}
     </tbody></table></div><p class="muted small">Essence you aren't saving for upgrades can be sold on the Bazaar: about <b>${fmt(total)}</b> right now. Dungeon chests and slayers are the main sources.</p></div>`;
 }
 function skillMoneyHTML(st, id){
@@ -3636,6 +3688,10 @@ $("#load").addEventListener("click", loadPlayer);
 $("#demo").addEventListener("click", loadDemo);
 $("#profile").addEventListener("change", showProfile);
 [$("#username"), $("#apikey")].forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") loadPlayer(); }));
+
+$("#priceMode").value = PRICE_MODE;
+$("#priceMode").addEventListener("change", e => setPriceMode(e.target.value));
+loadAvg().then(a => { if (!a){ const o = $("#priceMode"); o.title = "No price history recorded yet"; } });
 
 // ---------- installable app ----------
 // Chrome / Edge fire beforeinstallprompt when the page can be installed; we show our own button for it.
