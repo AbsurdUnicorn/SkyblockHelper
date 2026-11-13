@@ -150,7 +150,7 @@ const AVG_SKILLS = ["FARMING","MINING","COMBAT","FORAGING","FISHING","ENCHANTING
 const CATA_XP = [50,125,235,395,625,955,1425,2095,3045,4385,6275,8940,12700,17960,25340,35640,50040,70040,97640,135640,188140,259640,356640,488640,668640,911640,1239640,1684640,2284640,3084640,4149640,5559640,7459640,9959640,13259640,17559640,23159640,30359640,39559640,51559640,66559640,85559640,109559640,139559640,177559640,225559640,285559640,360559640,453559640,569809640];
 const SLAYERS = {
   zombie:{name:"Revenant Horror",xp:[5,15,200,1000,5000,20000,100000,400000,1000000]},
-  spider:{name:"Tarantula Broodfather",xp:[5,25,200,1000,5000,20000,100000,400000,1000000]},
+  spider:{name:"Tarantula Broodfather",xp:[10,25,200,1000,5000,20000,100000,400000,1000000]},
   wolf:{name:"Sven Packmaster",xp:[10,30,250,1500,5000,20000,100000,400000,1000000]},
   enderman:{name:"Voidgloom Seraph",xp:[10,30,250,1500,5000,20000,100000,400000,1000000]},
   blaze:{name:"Inferno Demonlord",xp:[10,30,250,1500,5000,20000,100000,400000,1000000]},
@@ -299,6 +299,13 @@ async function buildState(R, profile, museum, uuid){
   st.sbLevel = (me.leveling?.experience || 0) / 100;
   st.purse = me.currencies?.coin_purse; st.bank = profile.banking?.balance;
 
+  // collection totals (co-op wide), also used for collection-based skill cap raises
+  const collSum = {};
+  for (const m of Object.values(profile.members)) for (const [k,v] of Object.entries(m.collection || {})) collSum[k] = (collSum[k]||0) + v;
+  const capFromColl = {};
+  for (const c of Object.values(R.collections)) for (const [id, it] of Object.entries(c.items)) for (const t of it.tiers)
+    if ((collSum[id] || 0) >= t.amountRequired) for (const u of t.unlocks || []){ const m = String(u).match(/\+(\d+) (\w+) Level Cap/i); if (m) capFromColl[m[2].toUpperCase()] = (capFromColl[m[2].toUpperCase()] || 0) + +m[1]; }
+
   // skills
   const exp = me.player_data?.experience;
   if (!exp) st.apiOff.push("Skills");
@@ -308,12 +315,18 @@ async function buildState(R, profile, museum, uuid){
     let cap = s.maxLevel;
     if (id === "FARMING" && me.jacobs_contest) cap = Math.min(s.maxLevel, 50 + (me.jacobs_contest.perks?.farming_level_cap || 0));
     if (id === "TAMING" && me.pets_data) cap = Math.min(s.maxLevel, 50 + (me.pets_data.pet_care?.pet_types_sacrificed || []).length);
-    return {id, name:s.name, xp, maxLevel:cap, fullMax:s.maxLevel, ...levelFrom(xp, table, cap)};
+    let capNote = "";
+    if (id === "FORAGING"){
+      // 50 + Fig/Mangrove/Helix Log IX + Agatha/Miria shop unlocks (the shop ones aren't clearly in the API)
+      const shop = +(me.foraging_core?.foraging_level_cap ?? me.foraging_core?.level_cap ?? 0) || 0;
+      cap = Math.min(s.maxLevel, 50 + (capFromColl.FORAGING || 0) + (shop > 50 ? shop - 50 : shop));
+      if (!shop && cap < s.maxLevel) capNote = "Agatha / Miria cap unlocks aren't in the API, so your real cap may be higher";
+    }
+    return {id, name:s.name, xp, maxLevel:cap, fullMax:s.maxLevel, capNote, ...levelFrom(xp, table, cap)};
   });
 
   // collections (summed across coop members)
-  const sum = {};
-  for (const m of Object.values(profile.members)) for (const [k,v] of Object.entries(m.collection || {})) sum[k] = (sum[k]||0) + v;
+  const sum = collSum;
   if (!me.collection) st.apiOff.push("Collections");
   st.collections = [];
   for (const [cat, c] of Object.entries(R.collections)) for (const [id, it] of Object.entries(c.items)){
@@ -1133,7 +1146,7 @@ function limitRows(root){
 
 // ---------- shards (Hunting / attributes) ----------
 // Shard list, fusion recipes, catch rates and "how to get" text come from the open-source SkyShards project (MIT).
-const SS_BASES = ["https://cdn.jsdelivr.net/gh/Campionnn/SkyShards@dev", "https://cdn.jsdelivr.net/gh/Campionnn/SkyShards@master"];
+const SS_BASES = ["https://cdn.jsdelivr.net/gh/Campionnn/SkyShards@master", "https://raw.githubusercontent.com/Campionnn/SkyShards/master"];
 // Shards needed for each attribute level 1..10, by rarity
 const SHARD_LVL = {COMMON:[1,3,5,6,7,8,10,14,18,24], UNCOMMON:[1,2,3,4,5,6,7,8,12,16], RARE:[1,2,3,3,4,4,5,6,8,12], EPIC:[1,1,2,2,3,3,4,4,5,7], LEGENDARY:[1,1,1,2,2,2,3,3,4,5]};
 const SHARD_CUM = Object.fromEntries(Object.entries(SHARD_LVL).map(([r, a]) => [r, a.reduce((acc, n) => (acc.push((acc.at(-1) || 0) + n), acc), [])]));
@@ -1141,7 +1154,7 @@ const shNorm = s => String(s).toLowerCase().replace(/;\d+$/, "").replace(/^attri
 let SHARDS = null;
 // Where each shard's mob lives, for sources that only say "Charm X" / "Catch with Pocket Black Hole / Lasso".
 // Only areas we're confident about; everything else shows "location not listed".
-const GARDEN_PESTS = ["Fly","Locust","Cricket","Field Mouse","Rat","Keeled Slug","Mite","Moth","Mosquito","Beetle","Earthworm"];
+const GARDEN_PESTS = ["Fly","Locust","Cricket","Field Mouse","Rat","Keeled Slug","Mite","Moth","Mosquito","Beetle","Earthworm","Firefly","Dragonfly","Praying Mantis","Lunar Moth"];
 const MOB_LOC = {
   "Howling Spirit":"Howling Cave (The Park)", "Lapis Zombie":"Lapis Quarry (Deep Caverns)", "Miner Zombie":"Deep Caverns",
   "Bogged":"Backwater Bayou", "Cheeky Tiki":"Backwater Bayou", "Sneaky Tiki":"Backwater Bayou", "Shrieky Tiki":"Backwater Bayou", "Wiki Tiki":"Backwater Bayou",
@@ -2025,7 +2038,7 @@ document.addEventListener("click", e => {
 
 // ---------- Foraging & Heart of the Forest ----------
 // HotF tiers (cumulative EXP, tokens, what unlocks) from the wiki
-const HOTF_TIERS = [[0,1,""],[3000,3,"Axe Abilities"],[12000,5,""],[37000,7,""],[97000,9,"Torrhus Canyon"],[197000,11,"Foraging Clover Emblem, 3rd Axe Ability"],[347000,13,"Golden Foraging Clover Emblem"],[547000,15,"Daily contest bonus turns into Whispers"]];
+const HOTF_TIERS = [[0,1,""],[3000,3,"Axe Abilities"],[12000,5,""],[37000,7,"Torrhus Canyon"],[97000,9,"Foraging Clover Emblem"],[197000,11,"3rd Axe Ability"],[347000,13,"Golden Foraging Clover Emblem"],[547000,15,"Daily contest bonus turns into Whispers"]];
 // Where HotF lives in the profile isn't documented: keep anything that looks related and search it
 function collectKeys(obj, re){
   const out = {};
@@ -2132,7 +2145,7 @@ async function fillForaging(){
 
     out.innerHTML = `<div class="grid compact">
       ${statCard("Heart of the Forest", tier == null ? "—" : `Tier ${tier}`, tier == null ? "Not found in your profile" : next ? `${fmt(into)}/${fmt(next[0] - HOTF_TIERS[tier - 1][0])} EXP to tier ${tier + 1}` : "Max tier", tier == null ? null : next ? pct(into, next[0] - HOTF_TIERS[tier - 1][0]) : 100)}
-      ${statCard("Foraging skill", fskill ? fskill.level : "—", fskill ? `${fskill.maxLevel} max${fskill.maxed ? "" : ` · ${Math.round(fskill.progress * 100)}% to next`}` : "", fskill ? pct(fskill.level, fskill.maxLevel) : null)}
+      ${statCard("Foraging skill", fskill ? fskill.level : "—", fskill ? `${fskill.maxLevel} max${fskill.maxed ? "" : ` · ${Math.round(fskill.progress * 100)}% to next`}${fskill.capNote ? ` · ${esc(fskill.capNote)}` : ""}` : "", fskill ? pct(fskill.level, fskill.maxLevel) : null)}
       ${statCard("Days to next tier", tier == null || !next ? "—" : `~${Math.ceil(need / daily)}`, tier == null || !next ? "" : `${fmt(need)} EXP at ~${fmt(daily)}/day`, null)}
       ${statCard("Ember (HotF EXP shard)", ember ? `Level ${lv(ember)}/10` : "—", lv(ember) >= 10 ? "maxed: +10% HotF EXP" : `+${lv(ember)}% HotF EXP now`, ember ? lv(ember) * 10 : null)}
       ${h.whispers.length ? statCard("Whispers", h.whispers.slice(0, 2).map(([p, v]) => fmt(v)).join(" · "), h.whispers.slice(0, 2).map(([p]) => esc(p.split(".").pop().replace(/_/g, " "))).join(" · "), null) : ""}
@@ -2630,7 +2643,7 @@ function forgeHTML(st){
   const qf = nodes.forge_time || 0, cut = Math.min(30, 10 + qf * 0.5 + Math.floor(qf * 0.05) * 10) / 100 * (qf ? 1 : 0);
   const xp = mc.experience ?? dig(me, "skill_tree.experience.mining");
   const tier = xp == null ? null : HOTM_XP.filter(t => xp >= t).length;
-  const slots = tier == null ? 2 : Math.max(0, Math.min(7, tier));
+  const slots = tier == null ? 2 : tier < 2 ? 0 : Math.min(7, tier);
   const sort = store.get("forgeSort", "hour"), sellMode = store.get("forgeSell", "instant"), hideReq = store.get("forgeOnlyMine", false);
   const priceOf = (id, mode) => {
     if (id === "SKYBLOCK_COIN") return 1;
@@ -2848,6 +2861,7 @@ const RIFT_QUESTS = [
     ["cruxheir", "Craft the Crux Heirloom", "Kill Frozilles and craft Frosty Cruxes."],
     ["boatanchor", "Reed's Boat: Living Anchor", "Craft and give a Living Metal Anchor."],
     ["recpick", "Craft Self-Recursive Pickaxe", "From Nullified Metal (Autonulls)."],
+    ["juice", "Juice up an Armor Piece", "Craft and spawn a Null mob with Living Metal, then defeat it."],
     ["suit", "Max out your suit", "Defeat Autocaps, Autochests, Autopants and Autoboots."],
     ["livingcharm", "Craft the Living Timecharm", "Frosty Cruxes and Living Metal.", "charm:living"],
     ["heart", "Obtain a Living Metal Heart", "Use the Frozen Water Pungi on the Living Metal Snakes."],
