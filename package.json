@@ -1,7 +1,7 @@
 {
   "name": "skyblock-helper",
   "productName": "SkyBlock Helper",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Hypixel SkyBlock progress tracker",
   "main": "desktop/main.js",
   "private": true,
@@ -20,10 +20,33 @@
   "build": {
     "appId": "io.github.absurdunicorn.skyblockhelper",
     "productName": "SkyBlock Helper",
-    "files": ["index.html", "icons/**", "build/icon.png", "desktop/main.js"],
-    "directories": { "output": "dist", "buildResources": "build" },
-    "win": { "target": "nsis", "icon": "build/icon.png", "artifactName": "SkyBlock-Helper-Setup-${version}.${ext}" },
-    "nsis": { "oneClick": true, "perMachine": false, "createDesktopShortcut": true, "shortcutName": "SkyBlock Helper" },
-    "publish": [{ "provider": "github", "owner": "AbsurdUnicorn", "repo": "SkyblockHelper" }]
+    "files": [
+      "index.html",
+      "icons/**",
+      "build/icon.png",
+      "desktop/main.js"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png",
+      "artifactName": "SkyBlock-Helper-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "SkyBlock Helper"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AbsurdUnicorn",
+        "repo": "SkyblockHelper"
+      }
+    ]
   }
 }
