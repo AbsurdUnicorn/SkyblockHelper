@@ -1,7 +1,7 @@
 {
   "name": "skyblock-helper",
   "productName": "SkyBlock Helper",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Hypixel SkyBlock progress tracker",
   "main": "desktop/main.js",
   "private": true,
