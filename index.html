@@ -146,7 +146,7 @@ const API = "https://api.hypixel.net/v2";
 const RARITIES = ["COMMON","UNCOMMON","RARE","EPIC","LEGENDARY","MYTHIC","DIVINE","SPECIAL","VERY_SPECIAL","SUPREME"];
 const MP = {COMMON:3,UNCOMMON:5,RARE:8,EPIC:12,LEGENDARY:16,MYTHIC:22,DIVINE:22,SPECIAL:3,VERY_SPECIAL:5,SUPREME:22};
 const STAGES = ["STARTER","AMATEUR","SKILLED","INTERMEDIATE","EXPERT","PROFESSIONAL","MASTER"];
-const AVG_SKILLS = ["FARMING","MINING","COMBAT","FORAGING","FISHING","ENCHANTING","ALCHEMY","TAMING","CARPENTRY"];
+const AVG_SKILLS = ["FARMING","MINING","COMBAT","FORAGING","FISHING","ENCHANTING","ALCHEMY","TAMING","CARPENTRY","HUNTING"];
 const CATA_XP = [50,125,235,395,625,955,1425,2095,3045,4385,6275,8940,12700,17960,25340,35640,50040,70040,97640,135640,188140,259640,356640,488640,668640,911640,1239640,1684640,2284640,3084640,4149640,5559640,7459640,9959640,13259640,17559640,23159640,30359640,39559640,51559640,66559640,85559640,109559640,139559640,177559640,225559640,285559640,360559640,453559640,569809640];
 const SLAYERS = {
   zombie:{name:"Revenant Horror",xp:[5,15,200,1000,5000,20000,100000,400000,1000000]},
@@ -2464,7 +2464,7 @@ function skillExtraHTML(st, id){
       ${statCard("Double Drops", pk.double_drops != null ? `${pk.double_drops}/15` : "—", "Anita upgrade: +2 Farming Fortune each", pk.double_drops != null ? pct(pk.double_drops, 15) : null)}
       ${statCard("Farming level cap", pk.farming_level_cap != null ? `+${pk.farming_level_cap}/10` : "—", "Anita upgrade: Farming above 50", pk.farming_level_cap != null ? pk.farming_level_cap * 10 : null)}
       ${statCard("Medals", j.medals_inv ? `${md.gold || 0}🥇 ${md.silver || 0}🥈 ${md.bronze || 0}🥉` : "—", "unspent", null)}
-      ${statCard("Contests", j.contests ? fmt(Object.keys(j.contests).length) : "—", j.unique_brackets ? `${Object.keys(j.unique_brackets).length} bracket types reached` : "", null)}
+      ${statCard("Contests", j.contests ? fmt(Object.keys(j.contests).length) : "—", j.unique_brackets ? `gold+ in ${new Set([...(j.unique_brackets.gold || []), ...(j.unique_brackets.platinum || []), ...(j.unique_brackets.diamond || [])]).size} crops` : "", null)}
     </div>${gardenHTML(st)}`;
   }
   if (id === "FISHING"){
@@ -3697,19 +3697,187 @@ const SKILL_LINK = {FARMING:{goal:"farming", coll:"Farming"}, MINING:{goal:"mini
   FORAGING:{goal:"foraging", coll:"Foraging", tab:["foraging","Foraging & HotF"]}, FISHING:{goal:"fishing", coll:"Fishing"}, HUNTING:{goal:"hunting", tab:["shards","Shards"]}};
 // Short levelling advice per skill
 const SKILL_TIPS = {
-  FARMING:["Farm on the Garden: higher Garden level and plot upgrades unlock better crops and visitors.","Farming Fortune is the main stat. More drops also means more XP per hour from collections and contests.","Garden visitors and pests also give Farming XP.","Levels above 50 need the Farming Level Cap upgrades from Anita (paid in Jacob's Contest medals)."],
-  MINING:["Do Dwarven Mines and Glacite commissions: they give Mining XP and HotM XP together.","Gemstone mining in the Crystal Hollows and mineshafts in the Glacite Tunnels are the usual late-game XP sources.","Mining Speed and Mining Wisdom raise XP per hour the most."],
-  COMBAT:["Slayer bosses and their minibosses give a lot of Combat XP. See the Slayers tab.","Grinding mobs in a dense spot (Zealots, Crimson Isle mobs) with a mob-clearing weapon is the classic method.","Combat Wisdom (Apex Dragon shard, wisdom enchants and pets) multiplies everything."],
-  FORAGING:["See the Foraging & HotF tab: Galatea trees, Starlyn contests and tree gifts.","Sweep is the main stat: it lets one hit break more logs."],
-  FISHING:["Sea creatures give most of the XP, so Sea Creature Chance matters more than catch speed.","Trophy fishing and lava fishing on the Crimson Isle are good mid-game; fishing events and Water Hydra shard help.","Fishing Wisdom (Loch Emperor shard) raises XP from every catch."],
-  ENCHANTING:["Do the Experimentation Table (Superpairs, Chronomatron, Ultrasequencer) every day. It's the biggest free source.","Enchanting books at the table also gives XP; Enchanting Wisdom (Lapis Skeleton line) helps."],
-  ALCHEMY:["Brew potions in Brewing Stands: higher-tier ingredients give more XP per brew.","Many brewing stands at once on your island is the fastest way, since brewing runs while you do other things."],
-  CARPENTRY:["Carpentry XP comes from crafting items. Crafting your own enchanted materials and gear levels it over time.","Some players craft and uncraft cheap furniture for XP."],
-  RUNECRAFTING:["Runecrafting XP comes from fusing runes in the Runic Pedestal (and applying them). Max level is 25."],
-  SOCIAL:["Social XP comes from other players visiting your island and from co-op activity. Max level is 25."],
-  TAMING:["Taming XP comes from your pets gaining XP, so level pets with EXP Share and Kat.","Levels above 50 are unlocked through George."],
-  HUNTING:["Hunting XP comes from catching shards with Black Holes, Lassos, Nets and Hunting Traps.","Hunting Fortune means more shards per catch. See Shards → Hunting."],
+  FARMING:["Farm on the Garden: higher Garden level and plot upgrades unlock more crops and visitors.","Farming Fortune is the main stat. Pests (1,500 XP each) and visitors add XP on top of crops.","Levels above 50 are bought from Anita with gold medals from Jacob's Contests, one unique crop per level."],
+  MINING:["Do Dwarven Mines and Glacite commissions: they give Mining XP and HotM XP together.","Gemstones (70 XP each) in the Crystal Hollows and Glacite Mineshafts are the usual late-game XP sources.","Mining Speed and Mining Wisdom raise XP per hour the most; Compact on your drill is +10 Wisdom when maxed."],
+  COMBAT:["Slayer bosses and their minibosses give a lot of Combat XP. See the Slayers tab.","Grinding mobs in a dense spot (Zealots, Crimson Isle mobs) with a mob-clearing weapon is the classic method.","Combat Wisdom from slayer weapons (up to +45 against their mob), the Wolf pet and the Apex Dragon shard multiplies everything."],
+  FORAGING:["Galatea is the place: Fig, Mangrove and Helix logs give 15–25 XP each, and Starlyn Contests give 10k–60k per contest.","Sweep is the main stat: it lets one hit break more logs. See the Foraging & HotF tab.","Levels 51–57 come from Fig / Mangrove / Helix Log IX and Agatha's and Miria's shops."],
+  FISHING:["Sea creatures give most of the XP, so Sea Creature Chance matters more than catch speed.","Trophy fishing and lava fishing on the Crimson Isle are good mid-game.","Expertise (+20 Wisdom at X) and Mayor Marina's perk (+50 on public islands) are the biggest XP boosts."],
+  ENCHANTING:["Do the Experimentation Table (Superpairs, Chronomatron, Ultrasequencer) every day. It's the biggest source.","Enchanting at the table is capped at 500,000 XP a day, so it can't replace experiments.","The Guardian pet (+30) and the Lapis Creeper shard (Book Wisdom) are the Wisdom sources."],
+  ALCHEMY:["Brew potions in Brewing Stands: the XP depends on the first ingredient after the Awkward Potion.","Many brewing stands at once on your island is the fastest way, since brewing runs while you do other things. It only costs coins."],
+  CARPENTRY:["Crafting gives 3% of the ingredients' NPC sell price as XP. Vanilla recipes and the 2×2 grid give nothing.","Sapphire Power Scrolls and items that tier up (Perfect Armor, Griffin upgrade stones) are the usual ways to level it."],
+  RUNECRAFTING:["Kill Runic mobs (0.5% of mobs, purple name) and bosses, and fuse runes at Dusk's pedestal. Max level is 25.","Without a rank you're capped at level 3; MVP++ gets 3× XP."],
+  SOCIAL:["Social XP comes from guests: 10 XP per unique visitor and 2 XP a minute while they're on your island. Max level is 25.","Visiting other islands while the owner is online gives 1 XP a minute."],
+  TAMING:["Taming XP follows the XP your active pet earns, so level pets of the same type as the skill you're training.","Levels 51–60 come from giving George ten specific pets (see below)."],
+  HUNTING:["Hunting XP comes from shards: Black Holes, Lassos, Nets, Hunting Traps and Charm. Charmed shards give 10×.","Critter Safari runs give 5,000 XP per unique critter. Hunting Fortune means more shards per catch."],
 };
+// ---------- Skill guides (researched skill by skill on hypixelskyblock.minecraft.wiki, 2026-11-13) ----------
+// xp: where the XP comes from. wis: Wisdom sources [label, amount, kind, ref] where kind is pet (ref = pet type),
+// item (ref = item name, checked against what you own), shard (ref = shard name) or other.
+const WIS_ALL = [["Booster Cookie", "+25", "other"], ["Wyvern shard (Echo of Wisdom)", "+2–20% to wisdom attributes", "shard", "Wyvern"], ["Tiamat shard (Echo of Echoes)", "boosts Echo of Wisdom", "shard", "Tiamat"]];
+const SKILL_GUIDE = {
+  FARMING:{
+    xp:[["Harvesting crops", "Wheat, Carrot, Potato, Nether Wart: 4 XP each · Cane, Cocoa, Cactus, Mushroom, Pumpkin, Melon have their own rates. Garden crops count."],
+      ["Pests", "1,500 XP each (Field Mouse 6,000). Not boosted by Wisdom."],
+      ["Garden visitors", "XP scales with the request size and visitor rarity."],
+      ["Garden milestones", "Crop milestones give 100–50,000 XP, unique visitors served 500–30,000. Not boosted by Wisdom."],
+      ["Greenhouse and Farming minions", "Minions give a small fraction of the XP."]],
+    wis:[["Rabbit pet (Epic+)", "+30 at Lv100 (Rare +25)", "pet", "RABBIT"], ["Farming tool (Cultivating, Blessed reforge)", "up to +18 on a maxed tool", "other"],
+      ["Dragonfly shard (Garden Wisdom)", "+0.5–5", "shard", "Dragonfly"], ["Garden Chips", "up to +30 at level 20", "other"], ["Very Moldy Bread", "+30 for 60 min, +1 permanent (5 times)", "item", "Very Moldy Bread"],
+      ["Farming XP Boost III potion / God Potion", "+20", "other"], ["Atmospheric Filter", "+20 during Summer", "item", "Atmospheric Filter"],
+      ["Blue™ but Yellow Abicase", "+1.5", "item", "Blue™ but Yellow Abicase"], ["Agarimoo Artifact", "+1", "item", "Agarimoo Artifact"], ["Zorro's Cape, Pelt Belt, Rift Necklace", "+1 each", "other"], ["Fruit Bowl", "+1", "item", "Fruit Bowl"]],
+  },
+  MINING:{
+    xp:[["Ores and stone", "Cobblestone 1 · ores 5–10 · Pure ores 20 · Mithril 45 · Titanium 100 · Gemstones 70"],
+      ["Commissions", "Mining XP plus HotM XP. Milestones (25 commissions etc.) give big flat XP that Wisdom doesn't boost."],
+      ["Mineshafts and Glacite", "Glacite Tunnels and Mineshafts are the late-game XP spots."],
+      ["Mining minions", "A small fraction of the XP."]],
+    wis:[["Silverfish pet (Legendary)", "+30 (Epic +25)", "pet", "SILVERFISH"], ["Compact enchant", "+1 per level, up to +10", "other"], ["Cavernshade shard (Cavern Wisdom)", "+0.5–5", "shard", "Cavernshade"],
+      ["Mining XP Boost III potion / God Potion", "+20", "other"], ["Glacial Artifact", "+15 on Jerry's Workshop", "item", "Glacial Artifact"], ["Seasoned Mineman (HotM)", "up to +6", "other"], ["Gold Essence shop", "+3", "other"],
+      ["Mayor Cole", "+25 on public islands (perk)", "other"], ["Actually Blue™ Abicase", "+1.5", "item", "Actually Blue™ Abicase"]],
+  },
+  COMBAT:{
+    xp:[["Killing mobs", "Each mob gives a set amount. Mobs on your Private Island give none."],
+      ["Slayer bosses and minibosses", "The biggest steady source. See the Slayers tab."],
+      ["Bestiary milestones", "Claiming bestiary milestones gives Combat XP."],
+      ["Combat minions", "Zombie, Skeleton, Spider, slayer minions etc. give a small fraction."]],
+    wis:[["Wolf pet", "+30", "pet", "WOLF"], ["Slayer weapons", "+15/30/45 by tier: Reaper Falchion, Atomsplit Katana, Pooch Sword, Sting, Deathripper Dagger…", "other"],
+      ["Apex Dragon shard (Veteran)", "+1–10", "shard", "Apex Dragon"], ["Ghoul / Tarantula / Hound / Enderman pet", "up to +50 vs their slayer mob", "other"],
+      ["Combat XP Boost III potion / God Potion", "+20", "other"], ["Re-heated Gummy Polar Bear / Viking's Tear", "+10", "other"], ["Shriveled Bracelet", "+5 (Spider Slayer 7)", "item", "Shriveled Bracelet"],
+      ["Hunter Ring", "+5", "item", "Hunter Ring"], ["Bubba Blister", "+2", "item", "Bubba Blister"], ["Blue™ but Red Abicase", "+1.5", "item", "Blue™ but Red Abicase"]],
+  },
+  FORAGING:{
+    xp:[["Chopping logs", "Hub logs 6 · Fig Log 15 · Mangrove 20 · Helix 25 (Galatea). Lushlilac and Sea Lumies 15, Ruby Veilshroom 16."],
+      ["Starlyn Contests", "Agatha's give 10k–50k, Miria's 20k–60k per contest depending on your bracket."],
+      ["Tree Gifts", "Big trees on Galatea drop gifts with Foraging XP."],
+      ["Foraging minions", "A small fraction of the XP."]],
+    wis:[["Ocelot pet (Epic+)", "+30 (Uncommon/Rare +25)", "pet", "OCELOT"], ["Pandarai shard (Foraging Wisdom)", "+0.5–5", "shard", "Pandarai"], ["Efficient Forager (HotF)", "up to +15", "other"],
+      ["Moonglade reforge on your axe", "+1–6", "other"], ["Rotting Branch", "+10", "other"], ["Foraging Wisdom Boosters", "+1–2 per piece", "other"],
+      ["Foraging XP Boost III potion / God Potion", "+20", "other"], ["Forest Essence shop", "+2–6", "other"], ["Annihilation Cloak", "+2", "item", "Annihilation Cloak"], ["Blue™ but Green Abicase", "+1.5", "item", "Blue™ but Green Abicase"]],
+  },
+  FISHING:{
+    xp:[["Sea Creatures", "Most of the XP. Higher Fishing levels unlock stronger creatures worth more. None on your Private Island."],
+      ["Catches and treasure", "Every fish and treasure catch gives some XP."],
+      ["Trophy Fish", "Lava fishing on the Crimson Isle, with its own rewards from Odger."],
+      ["Fishing minions", "Fishing and Clay minions give a small fraction."]],
+    wis:[["Expertise enchant", "+2 per level, up to +20", "other"], ["Mayor Marina", "+50 on public islands (perk)", "other"], ["Loch Emperor shard (Sea Wisdom)", "+0.5–5", "shard", "Loch Emperor"],
+      ["Fishing XP Boost III potion / God Potion", "+20", "other"], ["Doug (Fishing Festival)", "+2–10", "other"], ["Lighter Blue™ Abicase", "+1.5", "item", "Lighter Blue™ Abicase"],
+      ["Chumming Talisman", "+1", "item", "Chumming Talisman"], ["Agarimoo Artifact", "+1", "item", "Agarimoo Artifact"], ["Ship parts (Captain Baha)", "+0.5 each, +1.5 total", "other"]],
+  },
+  ENCHANTING:{
+    xp:[["Experimentation Table", "Superpairs, Chronomatron and Ultrasequencer every day. The biggest source."],
+      ["Enchanting and anvils", "XP = 3.5 × levels spent^1.5. Capped at 500,000 XP per day from the table. Combining books gives none."],
+      ["Experience Bottles", "Grand and Titanic Experience Bottles from fishing."]],
+    wis:[["Guardian pet (Epic+)", "+30 (Rare +25)", "pet", "GUARDIAN"], ["Lapis Creeper shard (Book Wisdom)", "+0.5–5", "shard", "Lapis Creeper"], ["Enchanting XP Boost III potion / God Potion", "+20", "other"]],
+  },
+  ALCHEMY:{
+    xp:[["Brewing potions", "XP is collected when you take the potion out. It depends on the first ingredient after the Awkward Potion. Glowstone adds nothing."],
+      ["Nether Wart", "1 XP each on the Crimson Isle."], ["Nether Wart minions", "A small fraction of the XP."]],
+    wis:[["Witch pet", "+5", "pet", "WITCH"], ["Witch's Artifact", "+1.5 (Ring +1, Talisman +0.5)", "item", "Witch's Artifact"], ["Alchemy XP Boost III potion / God Potion", "+20", "other"], ["Celestial Mason Jar", "+5", "other"]],
+  },
+  CARPENTRY:{
+    xp:[["Crafting", "3% of the combined NPC sell price of the ingredients. Most vanilla recipes and the 2×2 inventory grid give none."],
+      ["Good crafts", "Items that tier up (Perfect Armor, Griffin upgrade stones) and Sapphire Power Scrolls give a lot."]],
+    wis:[["Celestial Mason Jar", "+25", "other"]],
+  },
+  RUNECRAFTING:{
+    xp:[["Runic mobs", "Any mob has a 0.5% chance to be Runic (purple name). They always drop a rune."],
+      ["Bosses", "Ender Dragons and other bosses."], ["Fusing runes", "At Dusk's Runic Pedestal behind the Blacksmith."],
+      ["Rank multiplier", "No rank: capped at level 3. VIP ×1.1, VIP+ ×1.25, MVP ×1.5, MVP+ ×2, MVP++ ×3."]],
+    wis:[["Quantum enchant", "+1.2–2 on weekends", "other"]],
+  },
+  SOCIAL:{
+    xp:[["Visitors", "10 XP per unique guest, plus 2 XP per minute while guests are on your island."],
+      ["Visiting", "1 XP per minute on someone else's island while its owner is online."],
+      ["Loudmouth Bass", "Losing a duel gives 1 XP per 10 lb (100 to 500,000)."]],
+    wis:[["Mountain Goat shard (Social Wisdom)", "+0.5–5", "shard", "Mountain Goat"], ["Celestial Mason Jar", "+3", "other"], ["Century Party Invitation", "", "other"]],
+  },
+  TAMING:{
+    xp:[["Your pets gaining XP", "Taming XP follows the Skill XP your active pet earns. A pet of a different type than the skill earns less."],
+      ["Maxed pets still count", "A Lv100 pet still gives Taming XP, and the extra is kept if you upgrade its rarity."],
+      ["Kat rarity upgrades", "Taming 10 for Rare→Epic, 20 for Epic→Legendary."]],
+    wis:[["Condor shard (Pet Wisdom)", "+0.5–5", "shard", "Condor"], ["Owl pet", "", "pet", "OWL"]],
+  },
+  HUNTING:{
+    xp:[["Hunting shards", "Per shard: Common 75, Uncommon 150, Rare 300, Epic 500, Legendary 1,000 XP. Ghosts and Glacite Walkers give half."],
+      ["Charming", "Shards from Charm give 10× (750–10,000 XP)."], ["Fusion", "A quarter of the hunting XP per shard fused."],
+      ["Critter Safari", "5,000 XP per unique critter (up to 185,000 per run) and floor drops of 2,500–10,000."],
+      ["David Hunterborough", "Trap Hunt and Salt Hunt milestones, Trapper animals, Lushlilac 4 / Tender Wood 8 / Vinesap 8 collections."]],
+    wis:[["Leatherback shard (Hunt Wisdom)", "+0.5–5", "shard", "Leatherback"], ["David's Cloak", "+5 (Attribute Menu milestone 26)", "item", "David's Cloak"], ["Majestic reforge", "up to +4", "other"],
+      ["Hunting Wisdom Boosters", "+0.5–3 per piece", "other"], ["Celestial Mason Jar", "+3", "other"]],
+  },
+};
+// George takes these pets (same or higher rarity) for Taming levels 51-60
+const GEORGE_PETS = [["RIFT_FERRET", "EPIC"], ["SLUG", "EPIC"], ["SPIRIT", "EPIC"], ["GIRAFFE", "EPIC"], ["JELLYFISH", "EPIC"], ["BAL", "EPIC"], ["BABY_YETI", "EPIC"], ["BLACK_CAT", "LEGENDARY"], ["FROST_WISP", "RARE"], ["ENDERMAN", "MYTHIC"]];
+// Gold medals and Jacob's Tickets for each Farming cap level 51-60 (Anita)
+const FARM_CAP_COST = [[1, 0], [1, 50], [1, 50], [1, 100], [1, 100], [2, 150], [2, 150], [2, 200], [2, 250], [3, 500]];
+let ITEM_BY_NAME = null;
+const itemIdByName = n => { if (!ITEM_BY_NAME && RES){ ITEM_BY_NAME = {}; for (const i of RES.items) ITEM_BY_NAME[stripMc(i.name).toLowerCase()] = i.id; } return ITEM_BY_NAME?.[String(n).toLowerCase()]; };
+// What the skill gives you right now: the perk at your level plus every flat stat from the levels you have
+function skillGivesHTML(st, s){
+  const lv = RES?.skills?.[s.id]?.levels || []; if (!lv.length || !s.level) return "";
+  const tot = {}; let perk = "";
+  for (const l of lv.slice(0, s.level)) for (const raw of l.unlocks || []){
+    const u = stripMc(raw).replace(/[-]/g, "").replace(/\s+/g, " ").trim();   // the API puts private-use stat icons in these lines
+    const p = u.match(/^([A-Z][a-zA-Z' ]+) [IVXLC]+ (.+)$/);
+    if (p && !/^\+/.test(u)){ perk = `${p[1]} ${s.level}: ${p[2].replace(/(\d[\d.,%]*)➜(\d[\d.,%]*)/g, "$2")}`; continue; }
+    const m = u.match(/^\+([\d.,]+)(%?) (.+)$/);
+    if (m && !/Access|Recipe|Reforge|Enchantment|Furniture|Sea Creature|Ability to/i.test(m[3])){ const k = m[3] + (m[2] ? " %" : ""); tot[k] = (tot[k] || 0) + parseFloat(m[1].replace(/,/g, "")); }
+  }
+  const stats = Object.entries(tot).filter(([k]) => !/Coins|SkyBlock XP/.test(k)).map(([k, v]) => `<b>+${fmt(Math.round(v * 100) / 100)}${/ %$/.test(k) ? "%" : ""}</b> ${esc(k.replace(/ %$/, ""))}`);
+  return `<h3 class="ph">🎁 What ${esc(s.name)} ${s.level} gives you</h3><div class="card small">
+    ${perk ? `<div><b>${esc(perk)}</b></div>` : ""}
+    ${stats.length ? `<div style="margin-top:4px">${stats.join(" · ")}</div>` : ""}
+    ${tot["Coins"] || tot["SkyBlock XP"] ? `<div class="muted" style="margin-top:4px">${fmt(tot["Coins"] || 0)} coins and ${fmt(tot["SkyBlock XP"] || 0)} SkyBlock XP earned from levels so far.</div>` : ""}
+    ${!perk && !stats.length ? `<div class="muted">No stats: ${esc(s.name)} only unlocks ${s.id === "RUNECRAFTING" ? "higher-level runes" : s.id === "SOCIAL" ? "island cosmetics and Amelia's shop" : "recipes"}.</div>` : ""}</div>`;
+}
+// Level cap: Farming (Anita), Taming (George), Foraging (collections + Agatha/Miria), Runecrafting (rank)
+function skillCapHTML(st, s){
+  const me = st.raw || {};
+  if (s.id === "FARMING"){
+    const j = me.jacobs_contest || {}, bought = j.perks?.farming_level_cap || 0, ub = j.unique_brackets || {};
+    const golds = new Set([...(ub.gold || []), ...(ub.platinum || []), ...(ub.diamond || [])]).size;
+    const left = FARM_CAP_COST.slice(bought), canBuy = Math.max(0, Math.min(golds, 10) - bought);
+    const need = left.slice(0, canBuy).reduce((a, c) => [a[0] + c[0], a[1] + c[1]], [0, 0]);
+    return `<h3 class="ph">📈 Raise the level cap <span class="muted small">(Anita, Jacob's Contests)</span></h3><div class="card small">
+      Cap bought: <b>${50 + bought}/60</b>. Each level needs a gold (or better) medal in one more <i>unique</i> crop. You have gold in <b>${golds}</b> crop${golds === 1 ? "" : "s"}.
+      ${bought >= 10 ? '<div class="good">Fully unlocked.</div>' : canBuy ? `<div>You can buy <b>${canBuy}</b> more level${canBuy > 1 ? "s" : ""} now for ${need[0]} gold medals and ${fmt(need[1])} Jacob's Tickets (you have ${j.medals_inv?.gold || 0} gold medals).</div>` : `<div>Next level: win gold in a new crop, then pay ${left[0][0]} gold medal${left[0][0] > 1 ? "s" : ""}${left[0][1] ? ` and ${left[0][1]} Jacob's Tickets` : ""}.</div>`}</div>`;
+  }
+  if (s.id === "TAMING"){
+    const given = new Set(me.pets_data?.pet_care?.pet_types_sacrificed || []);
+    const best = type => (st.pets || []).filter(p => p.type === type).sort((a, b) => PET_TIERS.indexOf(b.tier) - PET_TIERS.indexOf(a.tier))[0];
+    return `<h3 class="ph">📈 Raise the level cap <span class="muted small">(give George these pets)</span></h3><div class="card small"><div style="columns:2 220px">
+      ${GEORGE_PETS.map(([t, r]) => { const b = best(t), ok = b && PET_TIERS.indexOf(b.tier) >= PET_TIERS.indexOf(r);
+        return `<div>${given.has(t) ? '<span class="good">✓</span>' : "☐"} ${esc(petName(t))} <span class="muted">(${r.toLowerCase()}+)</span>${given.has(t) ? "" : ok ? ' <span class="good">you own one</span>' : ""}</div>`; }).join("")}</div>
+      <p class="muted" style="margin:6px 0 0">${given.size}/10 given → cap ${50 + given.size}. George keeps the pet, so give him a level 1 one.</p></div>`;
+  }
+  if (s.id === "FORAGING"){
+    const c = id => st.collections.find(x => x.id === id);
+    const rows = [["FIG_LOG", "Fig Log IX", 150000], ["MANGROVE_LOG", "Mangrove Log IX", 150000], ["HELIX_LOG", "Helix Log IX", 250000]].map(([id, n, need]) => { const x = c(id), a = x?.amount || 0;
+      return `<tr><td>${a >= need ? '<span class="good">✓</span>' : "☐"} ${n}</td><td style="width:40%">${a >= need ? "" : bar(pct(a, need))}</td><td class="muted">${fmt(a)} / ${fmt(need)}</td></tr>`; }).join("");
+    return `<h3 class="ph">📈 Raise the level cap <span class="muted small">(51–57)</span></h3><div class="card small"><table><tbody>${rows}
+      <tr><td>Agatha's shop</td><td colspan="2" class="muted">Milestone IV: 250 Agatha's Coupons + 2 Prizes · Milestone V: 500 Coupons + 5 Prizes</td></tr>
+      <tr><td>Miria's shop</td><td colspan="2" class="muted">Milestone IV: 250 Miria's Coupons + 2 Prizes · Milestone V: 500 Coupons + 5 Prizes</td></tr></tbody></table>
+      <p class="muted" style="margin:6px 0 0">The shop unlocks can't be read from the API, so tick them off in game.</p></div>`;
+  }
+  if (s.id === "RUNECRAFTING") return `<p class="muted small">Without a rank Runecrafting stops at level 3. It's cosmetic and isn't in the skill average.</p>`;
+  return "";
+}
+function skillGuideHTML(st, s){
+  const g = SKILL_GUIDE[s.id]; if (!g) return "";
+  const petTop = type => (st.pets || []).filter(p => p.type === type).sort((a, b) => PET_TIERS.indexOf(b.tier) - PET_TIERS.indexOf(a.tier))[0];
+  const status = ([, , kind, ref]) => {
+    if (kind === "pet"){ const p = petTop(ref); return p ? `<span class="good">✓ ${esc(p.tier.toLowerCase())} Lv${p.level}</span>` : '<span class="muted">not owned</span>'; }
+    if (kind === "item"){ const id = itemIdByName(ref); return id ? (owns(st, id) ? '<span class="good">✓ owned</span>' : '<span class="muted">not owned</span>') : ""; }
+    if (kind === "shard") return '<span class="muted">see shards</span>';
+    return "";
+  };
+  const wis = [...g.wis, ...WIS_ALL];
+  return `<div class="cols2">
+    <div><h3 class="ph">📚 Where ${esc(s.name)} XP comes from</h3><div class="card small"><table><tbody>${g.xp.map(([a, b]) => `<tr><td><b>${esc(a)}</b></td><td>${esc(b)}</td></tr>`).join("")}</tbody></table></div></div>
+    <div><h3 class="ph">☯ Boost it: ${esc(s.name)} Wisdom</h3><div class="card small"><table data-limit="8"><tbody>${wis.map(w => `<tr><td>${esc(w[0])}</td><td class="muted">${esc(w[1])}</td><td>${status(w)}</td></tr>`).join("")}</tbody></table>
+      <p class="muted" style="margin:6px 0 0">Each point of Wisdom = +1% ${esc(s.name)} XP. Sources from the wiki's ${esc(s.name)} Wisdom page.</p></div></div>
+  </div>`;
+}
 const SKILL_SHARD_CTX = {FARMING:"farming,garden", MINING:"mining,hotm", FORAGING:"foraging,hotf", FISHING:"fishing", COMBAT:"combat,end,crimson,mythological", ENCHANTING:"enchanting", TAMING:"taming,pets", HUNTING:"hunting", SOCIAL:"social"};
 function skillPane(st, s){
   const R = RES?.skills?.[s.id], link = SKILL_LINK[s.id] || {};
@@ -3739,6 +3907,9 @@ function skillPane(st, s){
         ${next.map(l => `<tr><td><b>${l.level}</b></td><td class="small">${fmt(l.totalExpRequired - s.xp)}${rate ? `<div class="muted">${hrs(l.totalExpRequired - s.xp)}</div>` : ""}</td><td class="small">${(l.unlocks || []).map(strip).join("<br>")}</td></tr>`).join("") || `<tr><td colspan="3" class="good">Maxed!</td></tr>`}
         </tbody></table></div></div>
     </div>
+    ${skillGivesHTML(st, s)}
+    ${skillCapHTML(st, s)}
+    ${skillGuideHTML(st, s)}
     ${colls.length ? `<h3 class="ph">${esc(link.coll)} collections <span class="muted small">(closest to next tier first)</span></h3>
       <div class="card"><table data-limit="8"><tbody>${colls.map(c => `<tr><td>${esc(c.name)}</td><td>${c.tier}/${c.maxTiers}</td><td style="width:40%">${c.tier >= c.maxTiers ? '<span class="muted">Maxed</span>' : bar(c.next ? pct(c.amount - c.prev, c.next - c.prev) : 100)}</td><td class="muted small">${fmt(c.amount)}${c.next ? ` / ${fmt(c.next)}` : ""}</td></tr>`).join("")}</tbody></table></div>` : ""}
     ${SKILL_SHARD_CTX[s.id] ? `<div data-shard-ctx="${SKILL_SHARD_CTX[s.id]}" data-title="Every shard for ${esc(s.name)}"></div>` : ""}
@@ -3754,7 +3925,7 @@ function viewSkills(st, A){
   ${list.map(s => `<tr><td><a href="#" data-skgo="${s.id}">${SKILL_ICON[s.id] || ""} ${esc(s.name)}</a>${AVG_SKILLS.includes(s.id) ? "" : ' <span class="pill">not in average</span>'}</td><td>${s.level}/${s.maxLevel}</td><td>${s.maxed ? '<span class="muted">Maxed</span>' : bar(s.progress*100) + `<span class="small muted">${Math.round(s.progress*100)}%</span>`}</td><td>${s.maxed ? "—" : fmt(s.toNext)}</td><td>${fmt(s.xp)}</td></tr>`).join("")}
   </tbody></table></div>`;
   setTimeout(fillSkillShards, 0);
-  return `<div class="grid compact">${statCard("Skill average", A.skillAvg.toFixed(2) + deltaOf("skillAvg",2), "farming, mining, combat, foraging, fishing, enchanting, alchemy, taming, carpentry", A.skillPct)}</div>
+  return `<div class="grid compact">${statCard("Skill average", A.skillAvg.toFixed(2) + deltaOf("skillAvg",2), "every skill except Social and Runecrafting", A.skillPct)}</div>
   ${subTabs("skills", [{id:"overview", label:"Overview", html:overview}, ...skills.map(s => ({id:s.id, label:`${SKILL_ICON[s.id] || ""} ${esc(s.name)}`, count:s.level, html:skillPane(st, s)}))])}`;
 }
 // XP-per-hour inputs and overview links
