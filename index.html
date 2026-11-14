@@ -207,6 +207,61 @@ details.mitem summary{cursor:pointer}
 .mapsvg .isl.locked .rock{filter:grayscale(.6) brightness(.8)}
 .mapsvg .lbl{stroke:#0d1b3a}
 @media (prefers-reduced-motion: reduce){.mapsvg .cloud,.mapsvg .isl .float{animation:none}}
+
+/* ===== friendlier UI ===== */
+nav button{border-radius:9px;transition:background .15s,color .15s,transform .1s}
+nav button:hover{color:var(--text);border-color:#3a4258}
+nav button:active{transform:translateY(1px)}
+.card{border-radius:12px;transition:border-color .15s}
+.card:hover{border-color:#353c52}
+.card.stat{position:relative;overflow:hidden;background:linear-gradient(180deg,#1a1e29,var(--panel))}
+.card.stat::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:linear-gradient(90deg,var(--accent),transparent)}
+.sthead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.sthead h3{margin:0!important}
+.sticon{width:28px;height:28px;flex:none;border-radius:8px;display:grid;place-items:center;font-size:15px;background:rgba(245,184,61,.12);border:1px solid rgba(245,184,61,.25)}
+.bar{height:9px;border-radius:6px;background:#252a39}
+.bar>i{border-radius:6px;background:linear-gradient(90deg,#f5b83d,#f08a3d)}
+.bar.full>i{background:linear-gradient(90deg,#4cc38a,#3fb8a0)}
+.subtabs button{border-radius:9px}
+.subtabs button:hover{color:var(--text)}
+.card > table thead th{background:var(--panel2)}
+.card > table thead th:first-child{border-top-left-radius:8px}.card > table thead th:last-child{border-top-right-radius:8px}
+.card > table tbody tr:nth-child(even) td{background:rgba(255,255,255,.015)}
+th,td{padding:8px 10px}
+.section h2,h3.ph{display:flex;align-items:center;gap:8px}
+.section h2::before{content:"";width:4px;height:18px;border-radius:3px;background:var(--accent)}
+.msg{border-radius:10px}
+/* tiles */
+.tiles{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+.tiles.wide{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.tile{display:flex;flex-direction:column;gap:7px;background:linear-gradient(180deg,#1a1e29,var(--panel));border:1px solid var(--line);border-radius:12px;padding:12px;color:inherit;text-decoration:none;transition:border-color .15s,transform .15s}
+a.tile:hover,.tile:hover{border-color:#3d4560;transform:translateY(-1px)}
+.trow{display:flex;align-items:center;gap:10px}
+.tname{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tbig{font-size:22px;font-weight:700;line-height:1.1}
+.tic{width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-items:center;font-size:18px;background:var(--panel2);border:1px solid var(--line)}
+.tier{font-size:18px;font-weight:700}
+.tile.maxed{border-color:#24543d;background:linear-gradient(180deg,rgba(76,195,138,.08),var(--panel))}
+.pips{display:flex;gap:2px;flex-wrap:wrap}
+.pips i{flex:1;min-width:6px;max-width:22px;height:6px;border-radius:3px;background:#2a3042}
+.pips i.on{background:var(--accent)}
+.tile.maxed .pips i.on{background:var(--good)}
+.ring{--rc:var(--accent);width:52px;height:52px;flex:none;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--rc) calc(var(--p) * 1%),#262b3a 0)}
+.ring.full{--rc:var(--good)}
+.ring>span{width:42px;height:42px;border-radius:50%;background:var(--panel);display:grid;place-items:center;font-size:19px}
+.ring>span b{font-size:13px}
+.tile.pet{border-left:4px solid var(--pc)}
+.ring.petring{--rc:var(--pc)}
+.tile .pill{align-self:flex-start}
+.prio-tile .rank{color:var(--accent)}
+.prio-tile.hot{border-color:#5a4718;background:linear-gradient(180deg,rgba(245,184,61,.07),var(--panel))}
+.ttips{margin:0;padding-left:18px;font-size:13px;color:#c9cede}
+.ttips li{margin:2px 0}
+.tlink{font-size:12px;margin-top:auto}
+.tiles.floors{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
+.tile.floor{align-items:center;text-align:center}
+.fnum{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-weight:800;background:rgba(176,80,106,.18);border:1px solid rgba(176,80,106,.45);color:#f0a5b8}
+.tile .mm{color:#ff8f8f}
 </style>
 </head>
 <body>
@@ -262,7 +317,21 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = n => n == null ? "—" : Math.abs(n) >= 1e9 ? (n/1e9).toFixed(2)+"B" : (Math.abs(n) >= 1e6 ? (n/1e6).toFixed(n>=1e7?1:2)+"M" : Math.abs(n) >= 1e4 ? (n/1e3).toFixed(1)+"k" : Math.round(n).toLocaleString());
 const pct = (a,b) => b ? Math.round(a/b*1000)/10 : 0;
-const bar = p => `<div class="bar"><i style="width:${Math.max(0,Math.min(100,p))}%"></i></div>`;
+const bar = p => `<div class="bar${p >= 100 ? " full" : ""}"><i style="width:${Math.max(0,Math.min(100,p))}%"></i></div>`;
+// icons picked from a title's words, so every card and sub-tab gets one without listing them all by hand
+const EMOJI_RE = /^\s*((?:\p{Extended_Pictographic}|\p{Regional_Indicator})[\uFE0F\u200D\p{Extended_Pictographic}]*)\s*/u;
+const ICON_WORDS = [[/skyblock level/i,"⭐"],[/skill average|skills?\b/i,"📊"],[/museum|donat/i,"🏛"],[/magic(al)? power|accessor|talisman/i,"💍"],[/collection|tiers unlocked/i,"📦"],
+  [/catacomb|dungeon|floor|secret/i,"💀"],[/kuudra/i,"🦑"],[/slayer|revenant|tarantula|sven|voidgloom|inferno|riftstalker/i,"🗡"],[/pet/i,"🐾"],[/fairy/i,"🧚"],[/minion/i,"🤖"],
+  [/garden|crop|farming|visitor|copper|medal|contest|anita|double drops/i,"🌾"],[/fish|trophy|sea creature|dolphin|odger/i,"🎣"],[/hotm|mountain|powder|mithril|gemstone|commission|crystal|forge|mining/i,"⛏"],
+  [/hotf|forest|forag|whisper|log/i,"🪓"],[/shard|attribute|fusion|syphon/i,"🔮"],[/bestiary|famil|mob|milestone reward/i,"👾"],[/rift|mote|enigma|timecharm/i,"🌀"],[/mayor|minister|election/i,"👑"],
+  [/date|next|contest|event|calendar/i,"⏰"],[/coin|bank|purse|price|cost|profit|money|worth|value|bits/i,"💰"],[/essence/i,"💠"],[/xp|experience|wisdom|level/i,"✨"],
+  [/healer|mage|berserk|archer|tank|class/i,"🛡"],[/upgrade|consumable|perk/i,"⬆"],[/abiphone|contact/i,"📱"],[/slot|unique craft/i,"🧩"],[/maxed|complete|done|ready/i,"✅"],[/loose|box|owned|have/i,"🎒"],
+  [/overview|home/i,"🏠"],[/to do|todo/i,"✅"],[/goal/i,"🎯"],[/where|area|island|zone/i,"📍"],[/all\b|list|every/i,"📋"],[/recommended|order|guide/i,"🧭"],[/missing/i,"❓"],[/best|score|top/i,"🏆"],
+  [/tips|help/i,"💡"],[/quest/i,"📜"],[/history|change/i,"📈"],[/plan|shop|buy/i,"🛒"],[/cheap/i,"💸"],[/flip/i,"🔁"],[/rare|boss/i,"👹"],[/account|event/i,"🏦"]];
+const iconFor = t => { const s = String(t).replace(/<[^>]*>/g, ""); const m = s.match(EMOJI_RE); if (m) return null; return (ICON_WORDS.find(([re]) => re.test(s)) || [])[1] || null; };
+const splitIcon = t => { const s = String(t), m = s.match(EMOJI_RE); return m ? [m[1], s.slice(m[0].length)] : [iconFor(s), s]; };
+// a round progress ring with something (an icon or number) in the middle
+const ring = (p, inner, cls = "") => `<div class="ring ${cls}${p >= 100 ? " full" : ""}" style="--p:${Math.max(0, Math.min(100, p || 0)).toFixed(1)}"><span>${inner}</span></div>`;
 const rar = (r, text) => `<span class="r-${esc(r)}">${esc(text ?? r)}</span>`;
 const store = {
   get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
@@ -1222,7 +1291,7 @@ rs.addEventListener("change", () => { if (RES?.items.some(i => i.name === rs.val
 // Only one pane shows at a time; the chosen pane is remembered per tab
 function subTabs(key, panes){
   let cur = store.get("sub:" + key, panes[0].id); if (!panes.some(p => p.id === cur)) cur = panes[0].id;
-  return `<div class="subtabs" data-sub="${key}">${panes.map(p => `<button data-pane="${p.id}" class="${p.id === cur ? "on" : ""}">${p.label}${p.count != null ? `<span class="cnt">${p.count}</span>` : ""}</button>`).join("")}</div>
+  return `<div class="subtabs" data-sub="${key}">${panes.map(p => `<button data-pane="${p.id}" class="${p.id === cur ? "on" : ""}">${iconFor(p.label) ? iconFor(p.label) + " " : ""}${p.label}${p.count != null ? `<span class="cnt">${p.count}</span>` : ""}</button>`).join("")}</div>
     ${panes.map(p => `<div class="pane" data-pane-of="${key}" data-pane="${p.id}" ${p.id === cur ? "" : "hidden"}>${p.html}</div>`).join("")}`;
 }
 document.addEventListener("click", e => {
@@ -2148,6 +2217,117 @@ document.addEventListener("click", e => {
   if (a){ e.preventDefault(); e.stopPropagation(); openShard(a.dataset.shard); }
 }, true);
 
+// ---------- Starlyn Contests: Agatha (Moonglade Marsh) and Miria (Torrhus Canyon) ----------
+// Points, brackets and rewards from the wiki's Starlyn Contest, Agatha and Miria pages.
+// acts: [label, points, note] · brackets: [points, rarity, coupons, rewards]
+const CONTESTS = {
+  agatha:{name:"Agatha's Contest", host:"Agatha", island:"Moonglade Marsh", coupon:"AGATHA_COUPON", prize:"Agatha's Prize", hotfReq:0,
+    acts:[["🎁 Tree Gift", 10, "per gift"], ["🪵 100 Mangrove Logs", 6, "Foraging Fortune counts"], ["🪵 100 Fig Logs", 3, "Foraging Fortune counts"],
+      ["🐚 Shellwise / Mudworm Shard", 45, "hunting"], ["🦎 Any other creature", 30, "hunting, incl. Birries"], ["🐟 Coralot / Salmon / Lumisquid / Spike", 15, "hunting"],
+      ["🐛 Mossybit / Cod", 6, "hunting"], ["🌿 Verdant / Azure", 3, "hunting"], ["💎 Treasure catch", 25, "fishing"], ["🐙 Sea creature", 10, "fishing"], ["🎣 Fishing catch", 4, "fishing"],
+      ["⚔ Mob killed", 8, "combat"], ["🌸 Lushlilac", 9, "gathering"], ["✨ Sea Lumies", 2, "gathering"]],
+    brackets:[[25, "COMMON", 10, "2,500 Forest Whispers · 10 Forest Essence · 10k Foraging XP · 100 HotF XP"], [250, "UNCOMMON", 15, "5,000 Whispers · 20 Essence · 20k XP · 200 HotF XP"],
+      [1000, "RARE", 20, "7,500 Whispers · 30 Essence · 30k XP · 350 HotF XP"], [2000, "EPIC", 25, "10,500 Whispers · 40 Essence · 40k XP · 500 HotF XP · 10% Agatha's Prize"],
+      [3000, "LEGENDARY", 30, "12,500 Whispers · 50 Essence · 50k XP · 700 HotF XP · 20% Agatha's Prize"], [5000, "MYTHIC", 35, "15,000 Whispers · 60 Essence · 700 HotF XP (hidden bracket)"],
+      [8000, "DIVINE", 40, "17,500 Whispers · 70 Essence · 750 HotF XP (hidden)"], [12000, "SPECIAL", 45, "20,000 Whispers · 80 Essence · 750 HotF XP (hidden)"]],
+    milestones:[[100, "I→II: Crow Shard, Small Frog Treat; Whispers from contests +50%"], [500, "III: Forest Pledge III book, Moonglade Ring; Whispers +100%"],
+      [1500, "IV: +1 Foraging level cap, Heron Shard, Fighting Booster; Whispers +150%"], [3000, "V: Agatha Jewel emblem, Moonglade Artifact, Shiniest (20 Prizes); Whispers +200%"]]},
+  miria:{name:"Miria's Contest", host:"Miria", island:"Torrhus Canyon", coupon:"MIRIA_COUPON", prize:"Miria's Prize", hotfReq:4,
+    acts:[["🎁 Tree Gift", 10, "per gift"], ["🪵 100 Helix Logs", 9, "Foraging Fortune counts"], ["⚪ Common shard hunted", 9, "per creature, not per shard"], ["🟢 Uncommon shard hunted", 25, ""],
+      ["🔵 Rare shard hunted", 50, ""], ["🟣 Epic shard hunted", 100, ""], ["🟠 Legendary shard hunted", 200, ""], ["🎣 Fishing catch", 10, "fishing"], ["🐙 Sea creature", 10, "fishing"],
+      ["💜 GOOD treasure", 50, "fishing"], ["💛 GREAT treasure", 250, "fishing"], ["💗 OUTSTANDING treasure", 750, "fishing"], ["⚔ Mob killed", 4, "combat"], ["🍄 Ruby Veilshroom", 8, "gathering"], ["🍯 Honeycomb", 1, "gathering"]],
+    brackets:[[50, "COMMON", 10, "3,000 Desert Whispers · 20 Essence · 15k Foraging XP · 150 HotF XP"], [250, "UNCOMMON", 15, "5,000 Whispers · 30 Essence · 30k XP · 250 HotF XP · Basic Safari Ticket"],
+      [1000, "RARE", 20, "8,000 Whispers · 40 Essence · 45k XP · 400 HotF XP · Economy Safari Ticket"], [2500, "EPIC", 25, "12,000 Whispers · 50 Essence · 60k XP · 550 HotF XP · Premium Safari Ticket · 10% Miria's Prize"],
+      [5000, "LEGENDARY", 30, "18,000 Whispers · 50 Essence · 75k XP · 900 HotF XP · First-Class Safari Ticket · 20% Miria's Prize"], [10000, "MYTHIC", 35, "24,000 Whispers · 70 Essence · First-Class Ticket (hidden)"],
+      [15000, "DIVINE", 40, "30,000 Whispers · 80 Essence · First-Class Ticket (hidden)"], [20000, "SPECIAL", 45, "36,000 Whispers · 90 Essence · First-Class Ticket (hidden)"]],
+    milestones:[[100, "II: Woodpecker Shard, Small Sloth Claw; Whispers from contests +50%"], [500, "III: Petalfall I book, Torrhus Ring, Rubber Snorkel; Whispers +100%"],
+      [1500, "IV: +1 Foraging level cap, Vulture Shard, Winding Ivy; Whispers +150%"], [3000, "V: +1 Foraging level cap, Torrhus Artifact, Vial of Spring Water; Whispers +200%"]]},
+};
+const CONTEST_IN = {};   // calculator inputs, kept while the app is open
+const contestPts = k => CONTESTS[k].acts.reduce((a, [l, p], i) => a + p * (+CONTEST_IN[k + i] || 0), 0);
+const bracketOf = (k, pts) => CONTESTS[k].brackets.filter(b => pts >= b[0]).pop();
+function contestCalcHTML(k){
+  const C = CONTESTS[k], pts = contestPts(k), b = bracketOf(k, pts), nb = C.brackets.find(x => pts < x[0]);
+  return `<div class="ccalc" data-ccalc="${k}"><div class="card"><table><thead><tr><th>Activity</th><th>Points</th><th style="width:96px">How many</th><th>Total</th></tr></thead><tbody>
+    ${C.acts.map(([l, p, n], i) => `<tr><td>${esc(l)}${n ? `<div class="muted small">${esc(n)}</div>` : ""}</td><td><b>${p}</b></td><td><input type="number" min="0" step="1" data-cpts="${k}${i}" value="${CONTEST_IN[k + i] || ""}" placeholder="0" style="width:84px"></td><td class="small" data-cline="${k}${i}">${fmt(p * (+CONTEST_IN[k + i] || 0))}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="cresult" data-cres="${k}">${contestResultHTML(k, pts, b, nb)}</div></div>`;
+}
+function contestResultHTML(k, pts, b, nb){
+  return `<div class="tile ${b ? "r-glow" : ""}" style="--pc:var(--${b ? b[1] : "COMMON"})"><div class="trow"><span class="tic">🏆</span><div><div class="tname">${fmt(pts)} points</div>
+    <div class="small">${b ? `<b class="r-${b[1]}">${prettyKey(b[1])}</b> bracket · ${b[2]} coupons` : '<span class="muted">No bracket yet</span>'}</div></div></div>
+    ${nb ? `<div class="small muted">${fmt(nb[0] - pts)} more for <b class="r-${nb[1]}">${prettyKey(nb[1])}</b> (${fmt(Math.ceil(nb[0] / 20))} points a minute over 20 min)</div>${bar(pct(pts, nb[0]))}` : '<div class="small good">Top bracket reached</div>'}</div>`;
+}
+document.addEventListener("input", e => {
+  const i = e.target.closest?.("[data-cpts]"); if (!i) return;
+  CONTEST_IN[i.dataset.cpts] = Math.max(0, +i.value || 0);
+  const k = i.dataset.cpts.replace(/\d+$/, ""), idx = +i.dataset.cpts.slice(k.length), C = CONTESTS[k];
+  const cell = document.querySelector(`[data-cline="${i.dataset.cpts}"]`); if (cell) cell.textContent = fmt(C.acts[idx][1] * CONTEST_IN[i.dataset.cpts]);
+  const pts = contestPts(k); const r = document.querySelector(`[data-cres="${k}"]`);
+  if (r) r.innerHTML = contestResultHTML(k, pts, bracketOf(k, pts), C.brackets.find(x => pts < x[0]));
+});
+// your stage: what to aim for, built from the profile
+function contestStage(st, an, S, tier){
+  const lv = id => st.skills.find(s => s.id === id)?.level ?? 0;
+  const fl = lv("FORAGING"), hl = lv("HUNTING"), fishl = lv("FISHING");
+  const sh = n => { const s = S.list.find(x => x.name === n); return s ? an.byId[s.id] || {level:0, s} : null; };
+  const bull = sh("Bullfrog"), mud = sh("Mudworm");
+  const coupons = k => st.items?.[CONTESTS[k].coupon] || 0;
+  const fsk = st.skills.find(s => s.id === "FORAGING");
+  const steps = [], aims = {};
+  if (fl < 12){
+    steps.push(["🔒", `Reach Foraging 12 to enter the Moonglade Marsh (you're ${fl}).`, "Level foraging in The Park until then: contests open up after that."]);
+    return {steps, aims:{agatha:null, miria:null}, fl, hl, fishl, tier};
+  }
+  const early = tier == null ? fl < 25 : tier < 4, late = tier != null && tier >= 7;
+  aims.agatha = early ? "RARE" : late ? "MYTHIC" : "LEGENDARY";
+  aims.miria = tier != null && tier < 4 ? null : late ? "MYTHIC" : early ? "RARE" : "LEGENDARY";
+  steps.push(["📅", "Do your first 3 contests of the real-life day for the +1,200 HotF XP bonus each" + (tier >= 8 ? " (it's Whispers for you now, since you're HotF 8)." : "."), "A new contest starts every 20 minutes, so you can always join one."]);
+  if (bull) steps.push(["🐸", bull.level >= 10 ? "Berry Enjoyer is maxed: Lushlilac bushes plus the Birries that spawn are your easiest Agatha points." : `Level the Bullfrog shard (Berry Enjoyer, you're ${bull.level}/10).`, "The wiki's top tip for Agatha: Lushlilac is 9 points each and Birries count as creatures (30 each), no expensive gear needed."]);
+  if (mud && hl >= 5) steps.push(["🐛", "Hunt Mudworms and Shellwise when you see them: 45 points each at Agatha's.", "Points come per creature, so Hunting Fortune doesn't add score."]);
+  if (tier != null && tier < 4) steps.push(["🔒", `Miria's Contests need HotF 4 to reach Torrhus Canyon (you're tier ${tier}).`, "Until then put every contest into Agatha."]);
+  else {
+    steps.push(["🌊", "Miria: dive into Torrhus Springs, hunt Solars and Embers and pick Ruby Veilshrooms (8 each) in the air pockets.", "You need some Pressure Resistance to reach the third Veilshroom cave."]);
+    if (fishl >= 15) steps.push(["🎣", "Miria pays 10 per catch and 250–750 for GREAT / OUTSTANDING treasure, so a fast Treasure Chance setup also works.", `You're Fishing ${fishl}; Torrhus sea creatures need Fishing 15.`]);
+    if (hl >= 10) steps.push(["🏹", "Rare+ shards are worth 50–200 points each at Miria's: hunt the rarest creatures you can reach.", `You're Hunting ${hl}.`]);
+    steps.push(["🎟", "Miria's Uncommon+ brackets give Safari Tickets, and Legendary gives a First-Class one: that's how you get into the Critter Safari.", ""]);
+  }
+  if (fsk && fsk.maxLevel < 57) steps.push(["📈", `Your Foraging cap is ${fsk.maxLevel}. Milestone IV in Agatha's and Miria's shops (1,500 coupons each) and Miria's Milestone V each add +1.`, "Each contest gives 10–45 coupons, so Legendary every time is about 50 contests per milestone IV."]);
+  const held = ["agatha", "miria"].map(k => coupons(k) ? `${fmt(coupons(k))} ${CONTESTS[k].host}'s Coupons` : "").filter(Boolean);
+  if (held.length) steps.push(["🎫", `You're holding ${held.join(" and ")}.`, "Spend them on the Power (+Sweep) upgrades first, then Fig / Mangrove / Helix Fortune."]);
+  return {steps, aims, fl, hl, fishl, tier};
+}
+function contestsHTML(st, an, S, tier){
+  const G = contestStage(st, an, S, tier);
+  const aim = (k) => { const r = G.aims[k]; if (!r) return '<span class="muted">locked for now</span>'; const b = CONTESTS[k].brackets.find(x => x[1] === r); return `<b class="r-${r}">${prettyKey(r)}</b> · ${fmt(b[0])} points · ${b[2]} coupons`; };
+  const ladder = k => `<div class="card"><table><thead><tr><th>Bracket</th><th>Points</th><th>Coupons</th><th>Rewards</th></tr></thead><tbody>
+    ${CONTESTS[k].brackets.map(([p, r, c, rew]) => `<tr${G.aims[k] === r ? ' style="background:rgba(245,184,61,.08)"' : ""}><td><b class="r-${r}">${prettyKey(r)}</b>${G.aims[k] === r ? ' <span class="pill p-high">your target</span>' : ""}</td><td>${fmt(p)}</td><td>${c}</td><td class="small">${esc(rew)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <h4>Shop milestones <span class="muted small">(coupons earned in total)</span></h4><div class="tiles">${CONTESTS[k].milestones.map(([n, t]) => `<div class="tile"><div class="trow"><span class="tic">🎫</span><div class="tname">${fmt(n)} coupons</div></div><div class="small">${esc(t)}</div></div>`).join("")}</div>`;
+  const general = {
+    agatha:[["🌸", "Lushlilac + Birries", "Harvest Lushlilac bushes (9 each) and catch the Birries they spawn (30 each). With Berry Enjoyer X from Bullfrog shards this alone reaches high brackets."],
+      ["🐚", "Big-ticket hunts", "Shellwise and Mudworm are 45 points, any unlisted creature 30. Keep a Lasso / net ready while you do the rest."],
+      ["🎁", "Tree Gifts", "Every gift is 10 points, and Mangrove logs (6 per 100) are worth twice Fig logs (3 per 100). Foraging Fortune counts toward the 100."],
+      ["🎣", "Fishing on the side", "Treasure 25, sea creature 10, catch 4: fine filler, not a main route."]],
+    miria:[["🌊", "Torrhus Springs dive", "The wiki's go-to route: hunt Solars and Embers underwater and pick Ruby Veilshrooms (8 each) in the side air pockets. Needs Pressure Resistance."],
+      ["🏹", "Hunt rare shards", "Points scale by the shard's rarity: 9 / 25 / 50 / 100 / 200. One Legendary creature is worth 20 Ruby Veilshrooms."],
+      ["🎣", "Treasure fishing", "10 per catch, 50 / 250 / 750 for GOOD / GREAT / OUTSTANDING treasure. Lucky treasure catches can jump a whole bracket."],
+      ["🪵", "Helix + gifts", "9 points per 100 Helix logs and 10 per Tree Gift: steady points while you forage Helix for Helixis anyway."]],
+  };
+  const route = k => `<div class="tiles wide">${general[k].map(([i, t, d]) => `<div class="tile"><div class="trow"><span class="tic">${i}</span><div class="tname">${esc(t)}</div></div><div class="small">${esc(d)}</div></div>`).join("")}</div>`;
+  const pane = k => `<div class="cols2"><div><h3 class="ph">How to score</h3>${route(k)}<h3 class="ph">Brackets & rewards</h3>${ladder(k)}</div>
+      <div><h3 class="ph">Points calculator</h3><p class="muted small">Type how many of each you expect in one 20-minute contest to see the bracket you'd reach.</p>${contestCalcHTML(k)}</div></div>`;
+  const stage = `<div class="grid compact">
+      ${statCard("🌸 Agatha target", G.aims.agatha ? prettyKey(G.aims.agatha) : "—", aim("agatha"), null)}
+      ${statCard("🏜 Miria target", G.aims.miria ? prettyKey(G.aims.miria) : "—", aim("miria"), null)}
+      ${statCard("🌲 HotF tier", G.tier ?? "—", G.tier == null ? "not found in profile" : G.tier < 4 ? "Torrhus Canyon at tier 4" : "both contests open", G.tier != null ? pct(G.tier, 8) : null)}
+      ${statCard("🏹 Hunting / 🎣 Fishing", `${G.hl} / ${G.fishl}`, "points routes depend on these", null)}
+    </div>
+    <h3 class="ph">What to do at your stage</h3><ul class="mtodo">${G.steps.map(([i, t, d]) => `<li><span class="mtag">${i}</span><span><b>${esc(t)}</b>${d ? `<div class="muted small">${esc(d)}</div>` : ""}</span></li>`).join("")}</ul>
+    <p class="muted small">Targets: early (HotF under 4) aim for Rare, mid-game Legendary, HotF 7+ the hidden Mythic bracket. Contests run back to back every 20 minutes; points, brackets and rewards are from the wiki.</p>`;
+  return subTabs("contests", [{id:"stage", label:"🎯 Your stage", html:stage}, {id:"agatha", label:"🌸 Agatha (Moonglade)", html:pane("agatha")}, {id:"miria", label:"🏜 Miria (Torrhus)", html:pane("miria")}]);
+}
+
 // ---------- Foraging & Heart of the Forest ----------
 // HotF tiers (cumulative EXP, tokens, what unlocks) from the wiki
 const HOTF_TIERS = [[0,1,""],[3000,3,"Axe Abilities"],[12000,5,""],[37000,7,"Torrhus Canyon"],[97000,9,"Foraging Clover Emblem"],[197000,11,"3rd Axe Ability"],[347000,13,"Golden Foraging Clover Emblem"],[547000,15,"Daily contest bonus turns into Whispers"]];
@@ -2217,7 +2397,7 @@ async function fillForaging(){
         <li><b>Open Tree Gifts</b> while foraging on Galatea. They give HotF EXP, and Fig and Mangrove gifts also give 200 Forest Whispers.</li>
         <li><b>Level the Ember shard first.</b> Its attribute gives up to +10% HotF EXP from everything. ${ember ? `You're level ${lv(ember)}/10.` : ""} If you're saving Helia chapters, redeem them <i>after</i> Ember is high.</li>
         <li><b>Spend Whispers on Sweep and Foraging Fortune</b> perks first: they speed up everything else. Pangolin shard gives +up to 10% Whispers${pang ? ` (you: level ${lv(pang)})` : ""}.</li>
-        <li><b>Tier 5 unlocks Torrhus Canyon</b>, with bigger contests (150–900 EXP) and Bunbun for the Chocobun fusion.</li></ol>
+        <li><b>Tier 4 unlocks Torrhus Canyon</b>, with bigger contests (150–900 EXP) and Bunbun for the Chocobun fusion.</li></ol>
         <p class="muted small">Days estimate assumes the 3 daily bonus contests plus ~400 EXP per contest (~${fmt(daily)} EXP a day). Tree gifts and extra contests make it faster.</p></div>
       <div><h3 class="ph">Tiers</h3><div class="card">${tierTable}</div></div></div>
       ${colls.length ? `<h3 class="ph">Foraging collections</h3><div class="card"><table data-limit="7"><tbody>${colls.map(c => `<tr><td>${esc(c.name)}</td><td>${c.tier}/${c.maxTiers}</td><td style="width:40%">${bar(c.next ? pct(c.amount - c.prev, c.next - c.prev) : 100)}</td><td class="muted small">${fmt(c.amount)}${c.next ? ` / ${fmt(c.next)}` : " maxed"}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
@@ -2265,6 +2445,7 @@ async function fillForaging(){
     ${h.xp == null && !st.demo ? `<p class="muted small">Couldn't find Heart of the Forest EXP in your profile data, so tiers aren't marked. The guide below still applies.</p>` : h.xpPath ? `<p class="muted small">HotF EXP read from <code>${esc(h.xpPath)}</code>.</p>` : ""}
     ${subTabs("foraging", [
       {id:"level", label:"Level HotF", html:progress},
+      {id:"contests", label:"🏆 Agatha & Miria contests", html:contestsHTML(st, an, S, tier)},
       {id:"money", label:"💰 Money while foraging", html:money},
       {id:"shards", label:"Foraging shards", html:shards + `<div data-shard-ctx="foraging,hotf" data-title="Every shard for foraging and HotF" data-open="1"></div>`},
     ])}`;
@@ -2501,12 +2682,11 @@ function viewPets(st){
   const tierPill = t => `<span style="color:${PET_COLOR[t] || "inherit"};font-weight:600">${esc(prettyKey(t))}</span>`;
   const sorted = D.pets.slice().sort((a, b) => (PET_POINTS[b.tier] || 0) - (PET_POINTS[a.tier] || 0) || b.level - a.level);
   const mine = `<div class="toolbar"><input data-filter="pettab" placeholder="Filter pets…"><span class="muted small">${D.pets.length} pets, ${Object.keys(D.best).length} unique. ★ = the copy that counts for Pet Score.</span></div>
-    <div class="card"><table id="pettab"><thead><tr><th>Pet</th><th>Rarity</th><th>Level</th><th style="width:26%">Progress</th><th>Held item</th><th>Skill</th></tr></thead><tbody>
-    ${sorted.map(p => `<tr><td>${D.best[p.type] === p ? "★ " : ""}<b>${esc(petName(p.type))}</b>${p.active ? ' <span class="pill p-high">active</span>' : ""}</td><td>${tierPill(p.tier)}</td><td>${p.level}/${p.max}</td>
-      <td>${p.level >= p.max ? '<span class="good">Max level</span>' : bar(p.progress * 100) + `<span class="muted small">${fmt(p.toNext)} XP to ${p.level + 1}</span>`}</td>
-      <td class="small">${p.heldItem ? esc(nameOf(p.heldItem)) : '<span class="muted">—</span>'}${p.candyUsed ? `<div class="muted">${p.candyUsed} candy</div>` : ""}</td>
-      <td class="small muted">${esc(prettyKey((PET_LIST.find(x => x[0] === p.type) || [])[2] || ""))}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No pets found in your profile data.</td></tr>`}
-    </tbody></table></div>`;
+    <div class="tiles" id="pettab" data-limit="24">${sorted.map(p => { const sk = (PET_LIST.find(x => x[0] === p.type) || [])[2] || "";
+      return `<div class="tile pet" style="--pc:${PET_COLOR[p.tier] || "var(--accent)"}"><div class="trow">${ring(p.level >= p.max ? 100 : p.progress * 100, `<b>${p.level}</b>`, "petring")}<div style="min-width:0;flex:1">
+        <div class="tname">${D.best[p.type] === p ? "★ " : ""}${esc(petName(p.type))}</div><div class="small">${tierPill(p.tier)}${p.active ? ' <span class="pill p-high">active</span>' : ""}</div></div>${sk ? `<span class="tic" title="${esc(prettyKey(sk))} pet">${SKILL_ICON[String(sk).toUpperCase()] || "🐾"}</span>` : ""}</div>
+        <div class="small muted">${p.level >= p.max ? '<span class="good">Max level</span>' : `Lv ${p.level}/${p.max} · ${fmt(p.toNext)} XP to ${p.level + 1}`}</div>
+        ${p.heldItem ? `<div class="small">🎁 ${esc(nameOf(p.heldItem))}</div>` : ""}${p.candyUsed ? `<div class="small muted">🍬 ${p.candyUsed} candy</div>` : ""}</div>`; }).join("") || '<div class="muted">No pets found in your profile data.</div>'}</div>`;
   // one option per pet: the rarity with the lowest price per point (more points on a tie)
   const cheap = Object.values(D.opts.filter(o => o.price).reduce((m, o) => { const c = m[o.type]; if (!c || o.per < c.per || (o.per === c.per && o.gain > c.gain)) m[o.type] = o; return m; }, {})).sort((a, b) => a.per - b.per);
   const score = `<div class="cols2"><div><h3 class="ph">Magic Find milestones</h3><div class="card"><table><tbody>
@@ -3375,9 +3555,9 @@ function saveHistory(key, snap){
 
 // ---------- rendering ----------
 let CUR = null; // {st, A, hist}
-const TAB_GROUPS = [["", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"]]], ["Progress", [["skills","Skills"],["coll","Collections"],["bestiary","Bestiary"],["pets","Pets"],["museum","Museum"],["acc","Accessories"],["minions","Minions"],["upgrades","Upgrades"]]],
-  ["Combat", [["slayers","Slayers"],["combat","Dungeons & Kuudra"]]], ["Islands", [["garden","Farming & Garden"],["fishing","Fishing"],["mining","Mining & HotM"],["foraging","Foraging & HotF"],["rift","Rift"]]], ["", [["shards","🔮 Shards"]]],
-  ["Shopping", [["plan","Plan"],["auto","Auto bulk plan"]]], ["", [["history","History"]]]];
+const TAB_GROUPS = [["", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"]]], ["Progress", [["skills","📊 Skills"],["coll","📦 Collections"],["bestiary","👾 Bestiary"],["pets","🐾 Pets"],["museum","🏛 Museum"],["acc","💍 Accessories"],["minions","🤖 Minions"],["upgrades","⬆ Upgrades"]]],
+  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"]]], ["Islands", [["garden","🌾 Farming & Garden"],["fishing","🎣 Fishing"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["rift","🌀 Rift"]]], ["", [["shards","🔮 Shards"]]],
+  ["Shopping", [["plan","🛒 Plan"],["auto","🤖 Auto bulk plan"]]], ["", [["history","📈 History"]]]];
 const TABS = TAB_GROUPS.flatMap(g => g[1]);
 let tab = store.get("tab", "focus");
 
@@ -3431,11 +3611,12 @@ function render(){
 function filterTable(inp){
   const q = inp.value.toLowerCase(); const t = document.getElementById(inp.dataset.filter);
   t.classList.toggle("all", !!q);
-  t.querySelectorAll("tbody tr").forEach(r => r.style.display = r.textContent.toLowerCase().includes(q) ? "" : "none");
+  t.querySelectorAll("tbody tr, .tile").forEach(r => r.style.display = r.textContent.toLowerCase().includes(q) ? "" : "none");
 }
 
 function statCard(title, big, sub, p){
-  return `<div class="card"><h3>${title}</h3><div class="big">${big}</div>${sub ? `<div class="muted small">${sub}</div>` : ""}${p != null ? bar(p) : ""}</div>`;
+  const [ic, t] = splitIcon(title);
+  return `<div class="card stat"><div class="sthead">${ic ? `<span class="sticon">${ic}</span>` : ""}<h3>${t}</h3></div><div class="big">${big}</div>${sub ? `<div class="muted small">${sub}</div>` : ""}${p != null ? bar(p) : ""}</div>`;
 }
 
 function viewFocus(st, A){
@@ -3450,11 +3631,11 @@ function viewFocus(st, A){
   </div>
   <div class="section"><h2>What to focus on</h2>
     <p class="muted small">Areas are ordered from least to most complete. Work on the top ones first.</p>
-    <div class="card">${pr.map((a,i) => `<div class="prio"><div class="n">${i+1}</div><div style="flex:1">
-      <div style="display:flex;justify-content:space-between;gap:10px"><b>${a.name}</b><span class="muted small">${a.pct}% complete</span></div>${bar(a.pct)}
-      <ul style="margin:8px 0 0;padding-left:18px">${a.tips.map(t => `<li>${t}</li>`).join("")}</ul>
-      <a href="#" class="small" onclick="tab='${a.key}';store.set('tab',tab);render();return false">Open ${a.name} →</a>
-    </div></div>`).join("")}</div>
+    <div class="tiles wide">${pr.map((a,i) => `<div class="tile prio-tile${i < 3 ? " hot" : ""}">
+      <div class="trow">${ring(a.pct, `<b>${Math.round(a.pct)}%</b>`)}<div style="flex:1;min-width:0"><div class="tname"><span class="rank">#${i+1}</span> ${a.name}</div>${bar(a.pct)}</div></div>
+      <ul class="ttips">${a.tips.map(t => `<li>${t}</li>`).join("")}</ul>
+      <a href="#" class="tlink" onclick="tab='${a.key}';store.set('tab',tab);render();return false">Open ${a.name} →</a>
+    </div>`).join("")}</div>
   </div>`;
 }
 
@@ -4707,9 +4888,10 @@ function viewSkills(st, A){
   const list = st.skills.slice().sort((a,b) => a.level - b.level);
   const order = ["FARMING","MINING","COMBAT","FORAGING","FISHING","ENCHANTING","ALCHEMY","TAMING","CARPENTRY","HUNTING","RUNECRAFTING","SOCIAL"];
   const skills = st.skills.slice().sort((a, b) => (order.indexOf(a.id) + 99) % 99 - (order.indexOf(b.id) + 99) % 99);
-  const overview = `<div class="card"><table><thead><tr><th>Skill</th><th>Level</th><th style="width:35%">Progress</th><th>XP to next</th><th>Total XP</th></tr></thead><tbody>
+  const overview = `<div class="tiles">${skills.map(s => `<a href="#" class="tile" data-skgo="${s.id}"><div class="trow">${ring(s.maxed ? 100 : s.progress * 100, SKILL_ICON[s.id] || "✨")}<div style="min-width:0"><div class="tname">${esc(s.name)}</div><div class="tbig">${s.level}<span class="muted small"> / ${s.maxLevel}</span></div></div></div><div class="small muted">${s.maxed ? '<span class="good">Maxed</span>' : `${fmt(s.toNext)} XP to ${s.level + 1}`} · ${fmt(s.xp)} total</div>${AVG_SKILLS.includes(s.id) ? "" : '<span class="pill">not in average</span>'}</a>`).join("")}</div><div hidden><table><tbody>
   ${list.map(s => `<tr><td><a href="#" data-skgo="${s.id}">${SKILL_ICON[s.id] || ""} ${esc(s.name)}</a>${AVG_SKILLS.includes(s.id) ? "" : ' <span class="pill">not in average</span>'}</td><td>${s.level}/${s.maxLevel}</td><td>${s.maxed ? '<span class="muted">Maxed</span>' : bar(s.progress*100) + `<span class="small muted">${Math.round(s.progress*100)}%</span>`}</td><td>${s.maxed ? "—" : fmt(s.toNext)}</td><td>${fmt(s.xp)}</td></tr>`).join("")}
-  </tbody></table></div>`;
+  </tbody></table></div>
+  <p class="muted small">Click a skill for its guide, XP sources and shards.</p>`;
   setTimeout(fillSkillShards, 0);
   return `<div class="grid compact">${statCard("Skill average", A.skillAvg.toFixed(2) + deltaOf("skillAvg",2), "every skill except Social and Runecrafting", A.skillPct)}</div>
   ${subTabs("skills", [{id:"overview", label:"Overview", html:overview}, ...skills.map(s => ({id:s.id, label:`${SKILL_ICON[s.id] || ""} ${esc(s.name)}`, count:s.level, html:skillPane(st, s)}))])}`;
@@ -4743,6 +4925,7 @@ async function fillSkillShards(){
   } catch(e){ console.error(e); document.querySelectorAll("[data-skshards]").forEach(el => el.innerHTML = ""); }
 }
 
+const COLL_ICON = {Farming:"🌾", Mining:"⛏", Combat:"⚔", Foraging:"🪓", Fishing:"🎣", Rift:"🌀", Boss:"👹", Hunting:"🏹"};
 function viewColl(st, A){
   const C = A.coll;
   const cats = {};
@@ -4750,12 +4933,13 @@ function viewColl(st, A){
   const rows = st.collections.slice().sort((a,b) => (a.tier>=a.maxTiers) - (b.tier>=b.maxTiers) || ((b.next ? (b.amount-b.prev)/(b.next-b.prev) : 0) - (a.next ? (a.amount-a.prev)/(a.next-a.prev) : 0)));
   return `<div class="grid">
     ${statCard("Tiers unlocked", `${C.tiers}/${C.max}`, `${C.maxed} collections maxed`, C.pct)}
-    ${Object.entries(cats).map(([k,x]) => statCard(k, `${x.t}/${x.m}`, `${pct(x.t,x.m)}%`, pct(x.t,x.m))).join("")}
+    ${Object.entries(cats).map(([k,x]) => statCard(`${COLL_ICON[k] || "📦"} ${k}`, `${x.t}/${x.m}`, `${pct(x.t,x.m)}%`, pct(x.t,x.m))).join("")}
   </div>
   <div class="section"><h2>All collections</h2><div class="toolbar"><input data-filter="ctab" placeholder="Filter…"><span class="muted small">Sorted by closest to next tier. Coop members' amounts are combined.</span></div>
-  <div class="card"><table id="ctab"><thead><tr><th>Collection</th><th>Category</th><th>Tier</th><th style="width:30%">To next tier</th><th>Amount</th></tr></thead><tbody>
-  ${rows.map(c => { const f = c.next ? (c.amount-c.prev)/(c.next-c.prev) : 1; return `<tr><td>${esc(c.name)}</td><td>${esc(c.cat)}</td><td>${c.tier}/${c.maxTiers}</td><td>${c.tier>=c.maxTiers ? '<span class="muted">Maxed</span>' : bar(f*100) + `<span class="small muted">${fmt(c.next - c.amount)} more</span>`}</td><td>${fmt(c.amount)}</td></tr>`; }).join("")}
-  </tbody></table></div></div>`;
+  <div class="tiles" id="ctab" data-limit="24">${rows.map(c => { const f = c.next ? (c.amount-c.prev)/(c.next-c.prev) : 1, mx = c.tier >= c.maxTiers;
+    return `<div class="tile coll${mx ? " maxed" : ""}"><div class="trow"><span class="tic">${COLL_ICON[c.cat] || "📦"}</span><div style="min-width:0;flex:1"><div class="tname">${esc(c.name)}</div><div class="small muted">${esc(c.cat)}</div></div><div class="tier">${c.tier}<span class="muted">/${c.maxTiers}</span></div></div>
+      <div class="pips">${Array.from({length:c.maxTiers}, (_, k) => `<i class="${k < c.tier ? "on" : ""}"></i>`).join("")}</div>
+      ${mx ? '<div class="small good">✓ Maxed</div>' : bar(f*100) + `<div class="small muted">${fmt(c.amount)} / ${fmt(c.next)} · ${fmt(c.next - c.amount)} to go</div>`}</div>`; }).join("")}</div></div>`;
 }
 
 function viewCombat(st){
@@ -4763,12 +4947,9 @@ function viewCombat(st){
   const mm = Object.entries(st.mmFloors).filter(([k]) => /^\d+$/.test(k));
   return `<div class="section"><h2>Dungeons</h2><div class="grid">
     ${statCard("Catacombs", st.cata.level + deltaOf("cata",2), st.cata.maxed ? "Max level" : `${fmt(st.cata.toNext)} XP to ${st.cata.level+1}`, st.cata.progress*100)}
-    ${st.classes.map(c => statCard(c.id, c.level, c.maxed ? "Max" : `${fmt(c.toNext)} XP to ${c.level+1}`, c.progress*100)).join("")}
+    ${st.classes.map(c => statCard(`${({healer:"💉", mage:"🔮", berserk:"🪓", archer:"🏹", tank:"🛡"})[c.id] || "🛡"} ${prettyKey(c.id)}`, c.level, c.maxed ? "Max" : `${fmt(c.toNext)} XP to ${c.level+1}`, c.progress*100)).join("")}
   </div>
-  <div class="card" style="margin-top:12px"><table><thead><tr><th>Floor</th>${floors.map(([k]) => `<th>${k==="0"?"Entrance":"F"+k}</th>`).join("")}</tr></thead><tbody>
-    <tr><td>Completions</td>${floors.map(([,v]) => `<td>${fmt(v)}</td>`).join("")}</tr>
-    ${mm.length ? `<tr><td>Master mode</td>${floors.map(([k]) => `<td>${st.mmFloors[k] ? fmt(st.mmFloors[k]) : "—"}</td>`).join("")}</tr>` : ""}
-  </tbody></table>${floors.length ? "" : '<div class="muted">No dungeon runs recorded.</div>'}</div></div>
+  <h3 class="ph" style="margin-top:14px">Floor completions</h3>${floors.length ? `<div class="tiles floors">${floors.map(([k, v]) => `<div class="tile floor"><div class="fnum">${k === "0" ? "E" : "F" + k}</div><div class="tbig">${fmt(v)}</div><div class="small muted">${k === "0" ? "Entrance" : "Floor " + k} runs</div>${st.mmFloors[k] ? `<div class="small mm">M${k}: ${fmt(st.mmFloors[k])}</div>` : ""}</div>`).join("")}</div>` : '<div class="muted">No dungeon runs recorded.</div>'}</div>
   ${dungeonExtrasHTML(st)}
   <div data-shard-ctx="dungeons" data-title="Every shard for dungeons"></div>
   ${kuudraHTML(st)}
