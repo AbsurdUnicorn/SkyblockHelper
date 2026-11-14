@@ -262,6 +262,32 @@ a.tile:hover,.tile:hover{border-color:#3d4560;transform:translateY(-1px)}
 .tile.floor{align-items:center;text-align:center}
 .fnum{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-weight:800;background:rgba(176,80,106,.18);border:1px solid rgba(176,80,106,.45);color:#f0a5b8}
 .tile .mm{color:#ff8f8f}
+
+/* clickable things */
+.clk,[data-coll],[data-pet],[data-mob],[data-minion],[data-tfish],[data-npc],[data-go]{cursor:pointer}
+tr.clk:hover td{background:#232a3c}
+.card.stat.clk:hover{border-color:var(--accent);transform:translateY(-1px)}
+.card.stat.clk::after{content:"↗";position:absolute;top:10px;right:12px;font-size:12px;color:var(--muted);opacity:.6}
+.tile[data-coll]:hover,.tile[data-pet]:hover,.tile[data-go]:hover{border-color:var(--accent)}
+a.ilink{color:inherit;text-decoration:underline dotted rgba(255,255,255,.35);text-underline-offset:3px}
+#modal .tiles.floors{grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:6px}
+#modal .tile.floor{padding:8px;gap:3px}
+#modal .tile.floor .tbig{font-size:16px}
+#modal .tile.floor .fnum{width:26px;height:26px;font-size:12px;border-radius:8px}
+a.ilink:hover{text-decoration-color:var(--accent);text-decoration-style:solid}
+#modal .box{max-height:none}
+
+/* keyboard focus */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+tr:focus-visible{outline-offset:-2px}
+/* history charts */
+.tile.spark .tbig .delta{margin-left:6px}
+.sparksvg{width:100%;height:64px;display:block;margin:4px 0}
+.sparksvg .sline{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.sparksvg .sdot{fill:var(--accent);stroke:var(--panel);stroke-width:2;pointer-events:none}
+.sparksvg .shit{fill:transparent}
+.sparksvg .shit:hover + .sdot{r:5}
+.sparksvg .sbase{stroke:var(--line);stroke-width:1}
 </style>
 </head>
 <body>
@@ -340,11 +366,50 @@ const store = {
 function status(t){ $("#status").textContent = t; }
 function notice(html, err){ $("#notice").innerHTML = html ? `<div class="msg${err?" err":""}">${html}</div>` : ""; }
 
+// Errors carry a plain-language message; e.soft = Hypixel is down, busy or unreachable (saved data can stand in)
 async function getJSON(url, key){
-  const r = await fetch(url, key ? {headers:{"API-Key":key}} : {});
-  let j; try { j = await r.json(); } catch { throw new Error(`HTTP ${r.status} from ${new URL(url).host}`); }
-  if (!r.ok || j.success === false) throw new Error(j.cause || j.message || `HTTP ${r.status}`);
+  const host = new URL(url).host, isHy = /hypixel/.test(host);
+  const fail = (msg, soft) => Object.assign(new Error(msg), {soft});
+  let r;
+  try { r = await fetch(url, key ? {headers:{"API-Key":key}} : {}); }
+  catch { throw fail(`Couldn't reach ${host}. Check your internet connection.`, true); }
+  if (r.status === 429){
+    const s = +(r.headers.get("RateLimit-Reset") || r.headers.get("Retry-After") || 0);
+    throw fail(isHy ? `Hypixel says too many requests from your API key${s ? `. Try again in ${s} seconds` : ". Wait a minute and try again"} (each key gets a limited number of requests every 5 minutes).` : `${host} says too many requests. Wait a minute and try again.`, true);
+  }
+  if (r.status >= 500) throw fail(`${isHy ? "Hypixel's API" : host} is having problems right now (HTTP ${r.status}). Try again in a few minutes.`, true);
+  let j; try { j = await r.json(); } catch { throw fail(`HTTP ${r.status} from ${host}`, r.status >= 500); }
+  if (!r.ok || j.success === false){
+    const c = j.cause || j.message || `HTTP ${r.status}`;
+    throw fail(c, false);
+  }
   return j;
+}
+// tiny key/value store in IndexedDB for things too big for localStorage (game data, last profile)
+const idb = (() => {
+  let db;
+  const open = () => db ||= new Promise((res, rej) => { const q = indexedDB.open("sbhelper", 1); q.onupgradeneeded = () => q.result.createObjectStore("kv"); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+  const run = async (mode, fn) => { const d = await open(); return new Promise((res, rej) => { const t = d.transaction("kv", mode), q = fn(t.objectStore("kv")); t.oncomplete = () => res(q.result); t.onerror = () => rej(t.error); }); };
+  return {get: k => run("readonly", s => s.get(k)).catch(() => undefined), set: (k, v) => run("readwrite", s => s.put(v, k)).catch(e => console.warn("cache", e))};
+})();
+// keyless game data: reuse a copy younger than maxAge, else fetch; if fetching fails, fall back to any saved copy
+async function cachedJSON(url, maxAge){
+  const c = await idb.get("url:" + url);
+  if (c && Date.now() - c.t < maxAge) return c.j;
+  try { const j = await getJSON(url); idb.set("url:" + url, {t:Date.now(), j}); return j; }
+  catch(e){ if (c){ console.warn("using saved copy of", url, e.message); return c.j; } throw e; }
+}
+async function fetchOrCache(k, fn){
+  try { const v = await fn(); idb.set(k, v); return v; }
+  catch(e){ console.warn(e); const c = await idb.get(k); return c ?? null; }
+}
+// Minecraft name → UUID, remembered so the lookup service is only asked once per name
+async function uuidOf(name){
+  const k = "uuid:" + name.toLowerCase(), saved = store.get(k, null);
+  if (saved) return saved;
+  const p = await getJSON("https://playerdb.co/api/player/minecraft/" + encodeURIComponent(name));
+  const id = p.data?.player?.raw_id; if (!id) throw new Error(`No Minecraft player called "${name}".`);
+  store.set(k, id); return id;
 }
 
 // ---------- NBT (for inventory / accessory bag) ----------
@@ -386,9 +451,9 @@ async function loadResources(){
   if (RES) return RES;
   status("Loading game data…");
   const [items, skills, colls] = await Promise.all([
-    getJSON(API + "/resources/skyblock/items"),
-    getJSON(API + "/resources/skyblock/skills"),
-    getJSON(API + "/resources/skyblock/collections"),
+    cachedJSON(API + "/resources/skyblock/items", 6 * 3600e3),
+    cachedJSON(API + "/resources/skyblock/skills", 6 * 3600e3),
+    cachedJSON(API + "/resources/skyblock/collections", 6 * 3600e3),
   ]);
   const byId = {}; items.items.forEach(i => byId[i.id] = i);
   RES = { items: items.items, byId, skills: skills.skills, collections: colls.collections };
@@ -618,6 +683,13 @@ function demoState(R){
   st.ownedAccessories.forEach(a => st.items[a.id] = (st.items[a.id] || 0) + 1);
   st.shardSrc = {};
   st.hotfSrc = {foraging_core:{experience:168400, forest_whispers:6120, desert_whispers:840}};
+  { const now = Date.now(); st.raw.forge = {forge_processes:{forge_1:{
+      1:{type:"FORGING", id:"REFINED_MITHRIL", startTime:now - 5.2 * 3600e3, slot:1},
+      2:{type:"FORGING", id:"GEMSTONE_MIXTURE", startTime:now - 6 * 3600e3, slot:2},
+      3:{type:"FORGING", id:"DRILL_ENGINE", startTime:now - 9 * 3600e3, slot:3}}}}; }
+  Object.assign(st.raw.nether_island_player_data, {last_minibosses_killed:["BLADESOUL", "ASHFANG"], matriarch:{pearls_collected:14, last_attempt:Date.now() - 30 * 3600e3},
+    dojo:{...st.raw.nether_island_player_data.dojo, dojo_points_snake:540, dojo_points_lock_head:300, dojo_points_fireball:780}});
+  st.raw.mining_core.nodes.forge_time = 10;
   return st;
 }
 
@@ -706,8 +778,8 @@ function priorities(st, A){
   const upBest = A.acc.upgrades.slice().sort((a,b) => b.gain - a.gain).slice(0,2);
   areas.push({key:"acc", name:"Accessories", pct:A.acc.pct, tips:[
     `About <b>${A.acc.mp}</b> magical power from ${A.acc.ownedFamilies} accessory families (of ${A.acc.families}).`,
-    accCheap.length && `Cheap new accessories to pick up: ${accCheap.map(a => rar(a.first.tier, a.first.name)).join(", ")}.`,
-    upBest.length && `Best upgrades: ${upBest.map(u => `${esc(u.from.name)} → ${rar(u.to.tier, u.to.name)} (+${u.gain} MP)`).join("; ")}.`,
+    accCheap.length && `Cheap new accessories to pick up: ${accCheap.map(a => ilink(a.first.id, rar(a.first.tier, a.first.name))).join(", ")}.`,
+    upBest.length && `Best upgrades: ${upBest.map(u => `${ilink(u.from.id, esc(u.from.name))} → ${ilink(u.to.id, rar(u.to.tier, u.to.name))} (+${u.gain} MP)`).join("; ")}.`,
     A.acc.unrecombed.length > 5 && `${A.acc.unrecombed.length} accessories aren't recombobulated — recombs on your highest-rarity ones give the most MP.`,
   ]});
   const cn = A.coll.near.slice(0,3);
@@ -2419,7 +2491,7 @@ async function fillForaging(){
         <p class="muted small">Player-reported figures from the Hypixel forums and money-making guides (2026). Logs alone pay little; the money is in rare drops and shards, so forage <b>Helix</b> for Helixis.</p></div>
       <div><h3 class="ph">Drops worth selling <span class="muted small">(live Bazaar)</span></h3>
         <div class="card"><table><thead><tr><th>Item</th><th>Instant sell</th><th>Sell offer</th></tr></thead><tbody>
-        ${itemRows.map(r => `<tr><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}${r.per ? ` · ≈ ${fmt(r.bid / r.per)} per log` : ""}</div></td><td>${fmt(r.bid * tax)}</td><td>${fmt(r.ask * tax)}</td></tr>`).join("")}
+        ${itemRows.map(r => `<tr><td>${ilink(r.id)}<div class="muted small">${esc(r.note)}${r.per ? ` · ≈ ${fmt(r.bid / r.per)} per log` : ""}</div></td><td>${fmt(r.bid * tax)}</td><td>${fmt(r.ask * tax)}</td></tr>`).join("")}
         </tbody></table></div></div></div>
       <h3 class="ph">Shards you get while foraging</h3>
       <div class="card"><table><thead><tr><th>Shard</th><th>From</th><th>Instant sell</th><th>Weekly volume</th></tr></thead><tbody>
@@ -2683,10 +2755,10 @@ function viewPets(st){
   const sorted = D.pets.slice().sort((a, b) => (PET_POINTS[b.tier] || 0) - (PET_POINTS[a.tier] || 0) || b.level - a.level);
   const mine = `<div class="toolbar"><input data-filter="pettab" placeholder="Filter pets…"><span class="muted small">${D.pets.length} pets, ${Object.keys(D.best).length} unique. ★ = the copy that counts for Pet Score.</span></div>
     <div class="tiles" id="pettab" data-limit="24">${sorted.map(p => { const sk = (PET_LIST.find(x => x[0] === p.type) || [])[2] || "";
-      return `<div class="tile pet" style="--pc:${PET_COLOR[p.tier] || "var(--accent)"}"><div class="trow">${ring(p.level >= p.max ? 100 : p.progress * 100, `<b>${p.level}</b>`, "petring")}<div style="min-width:0;flex:1">
+      return `<div class="tile pet" data-pet="${p.type}|${p.tier}|${D.pets.filter(x => x.type === p.type && x.tier === p.tier).indexOf(p)}" title="Click for details and prices" style="--pc:${PET_COLOR[p.tier] || "var(--accent)"}"><div class="trow">${ring(p.level >= p.max ? 100 : p.progress * 100, `<b>${p.level}</b>`, "petring")}<div style="min-width:0;flex:1">
         <div class="tname">${D.best[p.type] === p ? "★ " : ""}${esc(petName(p.type))}</div><div class="small">${tierPill(p.tier)}${p.active ? ' <span class="pill p-high">active</span>' : ""}</div></div>${sk ? `<span class="tic" title="${esc(prettyKey(sk))} pet">${SKILL_ICON[String(sk).toUpperCase()] || "🐾"}</span>` : ""}</div>
         <div class="small muted">${p.level >= p.max ? '<span class="good">Max level</span>' : `Lv ${p.level}/${p.max} · ${fmt(p.toNext)} XP to ${p.level + 1}`}</div>
-        ${p.heldItem ? `<div class="small">🎁 ${esc(nameOf(p.heldItem))}</div>` : ""}${p.candyUsed ? `<div class="small muted">🍬 ${p.candyUsed} candy</div>` : ""}</div>`; }).join("") || '<div class="muted">No pets found in your profile data.</div>'}</div>`;
+        ${p.heldItem ? `<div class="small">🎁 ${ilink(p.heldItem)}</div>` : ""}${p.candyUsed ? `<div class="small muted">🍬 ${p.candyUsed} candy</div>` : ""}</div>`; }).join("") || '<div class="muted">No pets found in your profile data.</div>'}</div>`;
   // one option per pet: the rarity with the lowest price per point (more points on a tie)
   const cheap = Object.values(D.opts.filter(o => o.price).reduce((m, o) => { const c = m[o.type]; if (!c || o.per < c.per || (o.per === c.per && o.gain > c.gain)) m[o.type] = o; return m; }, {})).sort((a, b) => a.per - b.per);
   const score = `<div class="cols2"><div><h3 class="ph">Magic Find milestones</h3><div class="card"><table><tbody>
@@ -2829,12 +2901,12 @@ async function fillMining(){
     const money = `<div class="cols2">
       <div><h3 class="ph">Gemstones right now <span class="muted small">(live Bazaar, Flawless)</span></h3>
         <div class="card"><table><thead><tr><th>Gem</th><th>Instant sell</th><th>Per rough</th></tr></thead><tbody>
-        ${gems.map((r, i) => `<tr${i === 0 ? ' style="background:rgba(76,195,138,.08)"' : ""}><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}</div></td><td>${fmt(r.bid * tax)}</td><td class="muted small">≈ ${(r.bid * tax / r.per).toFixed(1)} coins</td></tr>`).join("")}
+        ${gems.map((r, i) => `<tr${i === 0 ? ' style="background:rgba(76,195,138,.08)"' : ""}><td>${ilink(r.id)}<div class="muted small">${esc(r.note)}</div></td><td>${fmt(r.bid * tax)}</td><td class="muted small">≈ ${(r.bid * tax / r.per).toFixed(1)} coins</td></tr>`).join("")}
         </tbody></table></div>
         <p class="muted small">1 Flawless = 80 Fine = 6,400 Flawed = 512,000 Rough. Mine whichever gem is on top in an area you can reach; Glacite gems need the Glacite Tunnels.</p></div>
       <div><h3 class="ph">Other drops worth selling</h3>
         <div class="card"><table><thead><tr><th>Item</th><th>Instant sell</th><th>Sell offer</th></tr></thead><tbody>
-        ${itemRows.filter(r => !/FLAWLESS/.test(r.id)).sort((a, b) => b.bid - a.bid).map(r => `<tr><td>${esc(nameOf(r.id))}<div class="muted small">${esc(r.note)}</div></td><td>${fmt(r.bid * tax)}</td><td>${fmt(r.ask * tax)}</td></tr>`).join("")}
+        ${itemRows.filter(r => !/FLAWLESS/.test(r.id)).sort((a, b) => b.bid - a.bid).map(r => `<tr><td>${ilink(r.id)}<div class="muted small">${esc(r.note)}</div></td><td>${fmt(r.bid * tax)}</td><td>${fmt(r.ask * tax)}</td></tr>`).join("")}
         </tbody></table></div></div></div>
       <h3 class="ph">Shards you get while mining</h3>
       <div class="card"><table data-limit="8"><thead><tr><th>Shard</th><th>From</th><th>Instant sell</th><th>Weekly volume</th></tr></thead><tbody>
@@ -2855,6 +2927,7 @@ async function fillMining(){
     ${subTabs("mining", [
       {id:"level", label:"Level HotM", html:level},
       {id:"money", label:"💰 Money while mining", html:money},
+      {id:"slots", label:"⏲ Forge slots", count:forgeJobs(st).length || null, html:forgeSlotsHTML(st)},
       {id:"forge", label:"🔨 Forge profits", html:forgeHTML(st)},
       {id:"rare", label:"🐛 Scatha & rare mobs", html:rareMobsHTML(st, "MINING")},
       {id:"shards", label:"Mining shards", html:goalHTML(S, an, "mining") + `<div data-shard-ctx="mining,hotm" data-title="Every shard for mining and HotM" data-open="1"></div>`},
@@ -2910,6 +2983,36 @@ function dropEV(st, drops){
   return {ev, priced};
 }
 
+// ---------- Forge slots: what's forging now and when it's ready (profile: forge.forge_processes) ----------
+function quickForgeCut(st){
+  const me = st.raw || {}, nodes = me.mining_core?.nodes || dig(me, "skill_tree.nodes.mining") || {};
+  const qf = nodes.forge_time || 0;
+  return qf ? Math.min(30, 10 + qf * 0.5 + Math.floor(qf * 0.05) * 10) / 100 : 0;
+}
+function forgeJobs(st){
+  const P = dig(st.raw || {}, "forge.forge_processes") || {}, cut = quickForgeCut(st), jobs = [];
+  for (const forge of Object.values(P)) for (const [slot, j] of Object.entries(forge || {})){
+    if (!j || !j.id) continue;
+    const rec = FORGE_RECIPES.find(r => r[0] === j.id || r[0].split(";")[0] === j.id);
+    const secs = rec ? rec[2] * (1 - cut) : null, start = +j.startTime || 0;
+    jobs.push({slot:+j.slot || +slot, id:j.id, start, end:secs != null && start ? start + secs * 1000 : null, secs});
+  }
+  return jobs.sort((a, b) => a.slot - b.slot);
+}
+function forgeCard(st){
+  const J = forgeJobs(st); if (!J.length) return "";
+  const now = Date.now(), ready = J.filter(j => j.end && j.end <= now).length, next = J.filter(j => j.end > now).sort((a, b) => a.end - b.end)[0];
+  return statCard("🔨 Forge", `${ready}/${J.length} ready`, next ? `next: ${esc(nameOf(next.id))} in <span data-until="${next.end}">${untilTxt(next.end - now)}</span>` : ready ? "collect them at the Forge" : "", pct(ready, J.length));
+}
+function forgeSlotsHTML(st){
+  const J = forgeJobs(st), now = Date.now(), cut = quickForgeCut(st);
+  if (!J.length) return `<p class="muted">Nothing is in your Forge right now${st.raw?.forge ? "" : " (or your profile doesn't share it)"}. The Forge is in the Dwarven Mines; slots unlock with Heart of the Mountain tiers.</p>`;
+  return `<div class="tiles">${J.map(j => { const done = j.end && j.end <= now, p = j.end ? Math.min(100, (now - j.start) / (j.end - j.start) * 100) : null;
+    return `<div class="tile forge${done ? " maxed" : ""}">
+      <div class="trow">${ring(p ?? 0, done ? "✓" : `<b>${j.slot}</b>`)}<div style="flex:1;min-width:0"><div class="tname">${ilink(j.id)}</div><div class="small muted">Slot ${j.slot}${j.secs ? ` · ${dur(j.secs)} total` : ""}</div></div></div>
+      <div class="small">${done ? '<span class="good">Ready to collect</span>' : j.end ? `Ready in <b data-until="${j.end}">${untilTxt(j.end - now)}</b><div class="muted">${new Date(j.end).toLocaleString([], {weekday:"short", hour:"2-digit", minute:"2-digit"})}</div>` : '<span class="muted">Unknown recipe time</span>'}</div></div>`; }).join("")}</div>
+    <p class="muted small">Times come from the forge recipes${cut ? ` minus your Quick Forge (${Math.round(cut * 100)}%)` : ""}. Mayor perks that speed up the Forge aren't included. Reload your profile after collecting.</p>`;
+}
 // ---------- Forge profit calculator (Mining & HotM) ----------
 function forgeHTML(st){
   if (!needMarket()) return `<div class="muted">Loading Bazaar and auction prices…</div>`;
@@ -2980,7 +3083,7 @@ function farmingMoneyHTML(){
   }).filter(x => x.best > 0).sort((a, b) => b.best - a.best);
   return `<h3 class="ph">💰 Selling crops right now</h3>
     <div class="card"><table><thead><tr><th>Crop</th><th>NPC</th><th>Bazaar raw</th><th>As enchanted</th><th>Best per 1,000</th></tr></thead><tbody>
-    ${rows.map(x => `<tr><td>${esc(nameOf(x.raw))}</td><td class="small">${x.npc ? x.npc.toFixed(1) : "—"}</td><td class="small">${x.r ? x.r.toFixed(1) : "—"}</td><td class="small">${x.e ? x.e.toFixed(1) : "—"}</td><td><b>${fmt(x.best * 1000)}</b><div class="muted small">${esc(x.how)}</div></td></tr>`).join("")}
+    ${rows.map(x => `<tr><td>${ilink(x.raw)}</td><td class="small">${x.npc ? x.npc.toFixed(1) : "—"}</td><td class="small">${x.r ? x.r.toFixed(1) : "—"}</td><td class="small">${x.e ? x.e.toFixed(1) : "—"}</td><td><b>${fmt(x.best * 1000)}</b><div class="muted small">${esc(x.how)}</div></td></tr>`).join("")}
     </tbody></table></div>
     <p class="muted small">Coins per crop item after Bazaar tax. Crops drop different amounts per block (melons and cocoa drop several), so multiply by what you actually harvest per hour. Other farming money: Garden visitor offers, pest drops, and selling Jacob's contest rewards.</p>`;
 }
@@ -3006,7 +3109,7 @@ const ENCHANT_ITEMS = [["TITANIC_EXP_BOTTLE", "Transcendent / Metaphysical exper
 function enchantingMoneyHTML(){
   const rows = ENCHANT_ITEMS.map(([id, note]) => ({id, note, m:mkt(id)})).filter(x => x.m);
   return rows.length ? `<h3 class="ph">💰 Experiment rewards worth selling</h3><div class="card"><table><tbody>
-    ${rows.map(x => `<tr><td>${esc(nameOf(x.id))}<div class="muted small">${esc(x.note)}</div></td><td>${fmt(x.m.sell)}</td><td class="muted small">${x.m.src}</td></tr>`).join("")}</tbody></table></div>
+    ${rows.map(x => `<tr><td>${ilink(x.id)}<div class="muted small">${esc(x.note)}</div></td><td>${fmt(x.m.sell)}</td><td class="muted small">${x.m.src}</td></tr>`).join("")}</tbody></table></div>
     <p class="muted small">Daily experiments are free money: sell the bottles and book rewards you don't need.</p>` : "";
 }
 // Essence you're holding (Dungeons tab / Upgrades)
@@ -3381,7 +3484,29 @@ function extraFocusAreas(st){
   }
   if (st.garden){
     const xp = st.garden.garden_experience || 0, lvl = GARDEN_XP.filter(t => xp >= t).length, plots = (st.garden.unlocked_plots_ids || []).length;
-    areas.push({key:"skills", name:"Garden", pct:Math.round((lvl / 15 + plots / 24) / 2 * 1000) / 10, tips:[`Garden level <b>${lvl}/15</b>, plots <b>${plots}/24</b>. See Skills → Farming.`]});
+    areas.push({key:"garden", name:"Garden", pct:Math.round((lvl / 15 + plots / 24) / 2 * 1000) / 10, tips:[`Garden level <b>${lvl}/15</b>, plots <b>${plots}/24</b>.`, "Serve every new visitor and unlock plots with Compost for quick Garden XP."]});
+  }
+  // newer tabs: Bestiary, Minions, Trophy Fish, Fairy Souls, Crimson Isle
+  if (Object.keys(st.bestiary || {}).length){
+    const F = allFamilies(st), t = F.reduce((a, f) => a + f.tier, 0), m = F.reduce((a, f) => a + f.max, 0);
+    const cheap = F.filter(f => f.tier < f.max).sort((a, b) => (a.next - a.kills) - (b.next - b.kills)).slice(0, 3);
+    areas.push({key:"bestiary", name:"Bestiary", pct:pct(t, m), tips:[`Milestone <b>${Math.floor(t / 10)}</b>: ${10 - t % 10} more family tiers to the next (+1 Health each).`,
+      cheap.length && `Cheapest next tiers: ${cheap.map(f => `<b>${esc(f.name)}</b> <span class="muted">(${fmt(f.next - f.kills)} kills)</span>`).join(", ")}.`]});
+  }
+  { const set = craftedMinions(st), all = Object.values(MINIONS).reduce((a, [, tiers]) => a + tiers.length, 0), n = set.size, nextSlot = MINION_SLOTS.find(([c]) => n < c);
+    if (n) areas.push({key:"minions", name:"Minions", pct:pct(n, all), tips:[`<b>${n}</b> unique minion crafts${nextSlot ? `: ${nextSlot[0] - n} more for minion slot ${nextSlot[1]}` : ""}.`, "Cheap low tiers of minions you've never made count just as much toward slots."]}); }
+  if (me.trophy_fish){
+    const got = TROPHY_FISH.reduce((a, [k]) => a + ["bronze", "silver", "gold", "diamond"].filter(x => (+me.trophy_fish[`${k}_${x}`] || 0) > 0).length, 0), all = TROPHY_FISH.length * 4;
+    const noSilver = TROPHY_FISH.filter(([k]) => !["silver", "gold", "diamond"].some(x => +me.trophy_fish[`${k}_${x}`] > 0)).map(x => x[1]);
+    areas.push({key:"fishing", name:"Trophy Fish", pct:pct(got, all), tips:[`${got}/${all} Trophy Fish tiers caught.`, noSilver.length && `No Silver yet: ${noSilver.slice(0, 4).map(esc).join(", ")}${noSilver.length > 4 ? "…" : ""}.`]});
+  }
+  { const fs = dig(me, "fairy_soul.total_collected") ?? me.fairy_souls_collected;
+    if (fs != null && fs < 289) areas.push({key:"map", name:"Fairy Souls", pct:pct(fs, 289), tips:[`<b>${fs}/289</b> souls found. The Map tab lists every soul per island with coordinates to tick off.`]}); }
+  if (me.nether_island_player_data){
+    const C = crimsonData(st);
+    areas.push({key:"crimson", name:"Crimson Isle", pct:Math.round((Math.min(C.rep, 12000) / 12000 + Math.min(C.dojoPts, 7000) / 7000 + C.kBeat / 5) / 3 * 1000) / 10, tips:[
+      C.fac ? `${factionTitle(C.rep)[1]} with the ${C.fac === "mages" ? "Mages" : "Barbarians"} (${fmt(C.rep)} rep). Kill the 5 mini-bosses daily for +20 each.` : "Join a faction through Elle's questline.",
+      C.nextBelt && `Dojo: ${fmt(C.nextBelt[0] - C.dojoPts)} points to the ${C.nextBelt[1]} Belt. Lowest test: <b>${C.tests.slice().sort((a, b) => a.pts - b.pts)[0].name}</b>.`]});
   }
   return areas;
 }
@@ -3535,6 +3660,162 @@ function kuudraHTML(st){
   </div></div>`;
 }
 
+// ---------- SkyBlock Level: where your SkyBlock XP comes from (wiki: SkyBlock Levels/Tasks) ----------
+const SBL_REWARDS = [[3,"Community Shop"],[5,"Garden and Wardrobe"],[6,"Auto-pickup of drops"],[7,"Bazaar"],[12,"Wizard Portal"],[25,"Book of Progression"],[40,"White name prefix"],[50,"1B daily coin trade limit"],[75,"Book of Progression: Uncommon"],
+  [80,"Yellow prefix"],[100,"10B daily trade limit"],[120,"Green prefix"],[150,"Book of Progression: Rare"],[160,"Dark Green prefix"],[200,"Aqua prefix"],[225,"Book of Progression: Epic"],[240,"Cyan prefix"],[280,"Blue prefix"],
+  [300,"Book of Progression: Legendary"],[320,"Pink prefix"],[360,"Purple prefix"],[400,"Gold prefix, Book of Progression: Mythic"],[440,"Red prefix"],[480,"Dark Red prefix"]];
+const cumXp = (steps, n) => steps.slice(0, Math.max(0, n)).reduce((a, b) => a + b, 0);
+const factionTitle = rep => [[12000,"Hero"],[7000,"Honored"],[3000,"Trusted"],[1000,"Friendly"],[0,"Neutral"]].find(([n]) => rep >= n) || [-Infinity, "Hostile"];
+const DOJO_BELTS = [[0,"White",20],[1000,"Yellow",30],[2000,"Green",50],[4000,"Blue",75],[6000,"Brown",100],[7000,"Black",150]];
+function sbxpSources(st, A){
+  const me = st.raw || {}, S = [];
+  const row = (cat, name, have, max, tab, how) => S.push({cat, name, have:Math.min(have || 0, max), max, tab, how});
+  const skillXp = l => { let x = 0; for (let i = 1; i <= l; i++) x += i <= 10 ? 5 : i <= 25 ? 10 : i <= 50 ? 20 : 30; return x; };
+  row("Core", "Skill levels", st.skills.filter(s => !/RUNECRAFTING|SOCIAL/.test(s.id)).reduce((a, s) => a + skillXp(s.level), 0), 8710, "skills", "5–30 XP per level; low skills are the cheapest");
+  row("Core", "Museum donations", A.museum.xpHave, 3650, "museum", "the donation XP of each item");
+  const fs = dig(me, "fairy_soul.total_collected") ?? me.fairy_souls_collected;
+  if (fs != null) row("Core", "Fairy Souls", Math.floor(fs / 5) * 10, 570, "map", "10 XP per 5 souls exchanged with Tia");
+  row("Core", "Magical Power", A.acc.mp, 2184, "acc", "1 XP per Magical Power");
+  if ((st.pets || []).length) row("Core", "Pet Score", petData(st).score * 3, 1554, "pets", "3 XP per Pet Score point");
+  row("Core", "Collections", A.coll.tiers * 4, 3172, "coll", "4 XP per collection tier");
+  const MXP = [1,1,1,1,1,1,2,3,4,6,12,24];
+  row("Core", "Unique minions", [...craftedMinions(st)].reduce((a, k) => a + (MXP[(+(k.match(/_(\d+)$/) || [])[1] || 1) - 1] || 0), 0), 3164, "minions", "1 XP for tiers I–VI, up to 24 for XII");
+  row("Dungeons", "Catacombs level", cumXp(Array.from({length:50}, (_, i) => i < 39 ? 20 : 40), st.cata.level), 1220, "combat", "20 XP per level, 40 from level 40");
+  row("Dungeons", "Class levels", st.classes.reduce((a, c) => a + Math.min(50, c.level) * 4, 0), 1000, "combat", "4 XP per class level");
+  const fl = Object.entries(st.floors || {}).filter(([k, v]) => /^\d$/.test(k) && v > 0).reduce((a, [k]) => a + (k >= 5 ? 30 : 20), 0) + Object.entries(st.mmFloors || {}).filter(([k, v]) => /^\d$/.test(k) && v > 0).length * 50;
+  row("Dungeons", "First floor clears", fl, 540, "combat", "20–30 XP per floor, 50 per Master Mode floor");
+  row("Slaying", "Slayer levels", st.slayers.reduce((a, s) => a + cumXp([15,25,35,50,70,100,125,150,150], s.level), 0), 3825, "slayers", "15–150 XP per slayer level");
+  const bt = allFamilies(st).reduce((a, f) => a + f.tier, 0);
+  row("Slaying", "Bestiary", bt + Math.floor(bt / 10) * 10, 5635, "bestiary", "1 XP per family tier, +10 per milestone");
+  const kq = dig(me, "nether_island_player_data.kuudra_completed_tiers") || {};
+  row("Slaying", "Kuudra first clears", [["none",20],["hot",40],["burning",60],["fiery",80],["infernal",100]].reduce((a, [k, x]) => a + (kq[k] > 0 ? x : 0), 0), 300, "crimson", "20–100 XP per tier, first clear only");
+  const hx = me.mining_core?.experience ?? dig(me, "skill_tree.experience.mining");
+  if (hx != null) row("Skills", "Heart of the Mountain tiers", cumXp([35,45,60,75,90,110,130,180,210,240], HOTM_XP.filter(t => hx >= t).length), 1175, "mining", "35–240 XP per tier");
+  const comm = findInProfile(me, /^(total_)?commissions?(_completed|_done)?$|^completed_commissions$/i);
+  if (comm) row("Skills", "Commission milestones", cumXp([20,30,30,50,50,75], COMM_MILESTONES.filter(([n]) => comm.v >= n).length), 255, "mining", "20–75 XP per milestone");
+  const hf = hotfFromProfile(st.hotfSrc);
+  if (hf.xp != null) row("Skills", "Heart of the Forest tiers", cumXp([35,45,60,75,90,110,130,180], HOTF_TIERS.filter(t => hf.xp >= t[0]).length), 725, "foraging", "35–180 XP per tier");
+  if (st.garden){ const g = st.garden, lvl = GARDEN_XP.filter(t => (g.garden_experience || 0) >= t).length;
+    row("Skills", "Garden level", (lvl - 1) * 10, 140, "garden", "10 XP per Garden level");
+    row("Skills", "Garden plots", (g.unlocked_plots_ids || []).length * 5, 120, "garden", "5 XP per plot");
+    row("Skills", "Crop upgrades", Object.values(g.crop_upgrade_levels || {}).reduce((a, b) => a + (+b || 0), 0), 117, "garden", "1 XP per upgrade"); }
+  const jc = me.jacobs_contest || {};
+  row("Skills", "Anita upgrades", ((jc.perks?.double_drops || 0) + (jc.perks?.farming_level_cap || 0)) * 10, 250, "garden", "10 XP per Extra Drops / level-cap upgrade");
+  row("Skills", "Gold medal per crop", new Set([...(jc.unique_brackets?.gold || []), ...(jc.unique_brackets?.platinum || []), ...(jc.unique_brackets?.diamond || [])]).size * 10, 130, "garden", "10 XP the first time you get gold in each crop");
+  const tf = me.trophy_fish || {};
+  row("Skills", "Trophy Fish tiers", TROPHY_FISH.reduce((a, [k]) => a + ["bronze","silver","gold","diamond"].reduce((b, t, i) => b + ((+tf[`${k}_${t}`] || 0) > 0 ? [4,8,16,32][i] : 0), 0), 0), 1080, "fishing", "4 / 8 / 16 / 32 XP per new tier of a fish");
+  const sc = dig(me, "player_stats.pets.milestone.sea_creatures_killed");
+  if (sc != null) row("Skills", "Dolphin milestones", DOLPHIN_MS.filter(([n]) => sc >= n).length * 20, 100, "fishing", "20 XP per Dolphin pet milestone");
+  const N = me.nether_island_player_data || {};
+  row("Misc", "Abiphone contacts", (dig(N, "abiphone.active_contacts") || []).length * 10, 850, "upgrades", "10 XP per contact");
+  const repXp = r => [[1000,5],[3000,10],[7000,20],[12000,40]].reduce((a, [n, x]) => a + (r >= n ? x : 0), 0);
+  row("Misc", "Faction reputation titles", repXp(N.mages_reputation || 0) + repXp(N.barbarians_reputation || 0), 150, "crimson", "5–40 XP per title, in each faction");
+  const dp = Object.entries(N.dojo || {}).filter(([k]) => /^dojo_points_/.test(k)).reduce((a, [, v]) => a + v, 0);
+  row("Misc", "Dojo belts", Object.keys(N.dojo || {}).length ? DOJO_BELTS.filter(([n]) => dp >= n).reduce((a, b) => a + b[2], 0) : 0, 425, "crimson", "20–150 XP per belt");
+  row("Misc", "Rift Timecharms", (dig(me, "rift.gallery.secured_trophies") || []).length * 100, 800, "rift", "100 XP per Timecharm");
+  row("Misc", "Accessory bag upgrades", (me.accessory_bag_storage?.bag_upgrades_purchased || 0) * 2, 198, "acc", "2 XP per upgrade");
+  const cu = {}; for (const u of dig(st.rawProfile || {}, "community_upgrades.upgrade_states") || []) cu[u.upgrade] = Math.max(cu[u.upgrade] || 0, u.tier);
+  row("Misc", "Community Shop upgrades", (Math.min(5, cu.minion_slots || 0) + Math.min(5, cu.coins_allowance || 0) + Math.min(1, cu.island_size || 0) + Math.min(1, cu.guests_count || 0)) * 10, 120, "upgrades", "10 XP per tier (co-op wide)");
+  const ec = dig(me, "events.easter.chocolate_level");
+  if (ec != null) row("Events", "Chocolate Factory prestiges", Math.max(0, ec - 1) * 25, 125, "upgrades", "25 XP per prestige");
+  const perks = dig(me, "player_data.perks") || {};
+  row("Misc", "Essence Shop perks (approx.)", Object.values(perks).reduce((a, v) => a + cumXp([2,2,3,5,7,8,8,8,9,10], +v || 0), 0), 1940, "combat", "2–10 XP per perk tier");
+  return S;
+}
+function viewSbLevel(st, A){
+  const S = sbxpSources(st, A), total = Math.round(st.sbLevel * 100), tracked = S.reduce((a, s) => a + s.have, 0);
+  const lvl = Math.floor(st.sbLevel), into = total % 100, next = SBL_REWARDS.find(([l]) => l > lvl);
+  const left = S.map(s => ({...s, left:s.max - s.have})).filter(s => s.left > 0).sort((a, b) => b.left - a.left);
+  const table = rows => `<div class="card"><table><thead><tr><th>Source</th><th>Your XP</th><th style="width:24%"></th><th>Left</th><th>How</th></tr></thead><tbody>
+    ${rows.map(s => `<tr class="clk" data-go="${s.tab}" title="Open the tab for this"><td><b>${esc(s.name)}</b><div class="muted small">${s.cat}</div></td><td>${fmt(s.have)} <span class="muted small">/ ${fmt(s.max)}</span></td><td>${bar(pct(s.have, s.max))}</td>
+      <td>${s.max - s.have > 0 ? fmt(s.max - s.have) : '<span class="good">✓</span>'}</td><td class="small muted">${esc(s.how)}</td></tr>`).join("")}</tbody></table></div>`;
+  const cats = [...new Set(S.map(s => s.cat))];
+  return `<div class="grid compact">
+      ${statCard("⭐ SkyBlock Level", lvl + deltaOf("sbLevel", 2), `${into}/100 XP to level ${lvl + 1}`, into)}
+      ${statCard("Total SkyBlock XP", fmt(total), `max is about 62,143`, pct(total, 62143))}
+      ${statCard("🔎 Tracked here", fmt(tracked), tracked <= total ? `${pct(tracked, total)}% of your XP. The rest is quests, events, consumables and other tasks the API doesn't show` : "some sources are estimated from your profile, so this can run a little over your real total", null)}
+      ${next ? statCard("🎁 Next reward", `Level ${next[0]}`, `${esc(next[1])} · ${fmt(next[0] * 100 - total)} XP to go`, pct(total, next[0] * 100)) : ""}
+    </div>
+    ${subTabs("sblevel", [
+      {id:"left", label:"🎯 Biggest XP left", count:left.length, html:`<p class="muted small">Every source the tracker can read from your profile, with the most XP still to earn first. Each 100 XP is one level. Click a row to open its tab.</p>${table(left.slice(0, 15))}`},
+      {id:"all", label:"📋 Every source", count:S.length, html:cats.map(c => `<h3 class="ph">${c}</h3>${table(S.filter(s => s.cat === c))}`).join("")},
+      {id:"rewards", label:"🎁 Level rewards", html:`<div class="card"><table><tbody>${SBL_REWARDS.map(([l, r]) => `<tr${l <= lvl ? ' style="opacity:.6"' : ""}><td><b>Level ${l}</b></td><td>${esc(r)}</td><td class="small">${l <= lvl ? '<span class="good">✓ unlocked</span>' : `<span class="muted">${fmt(l * 100 - total)} XP to go</span>`}</td></tr>`).join("")}</tbody></table></div>
+        <p class="muted small">Every level also gives +5 Health, and every 5th level +1 Strength. A new emblem unlocks every 10 levels up to 100, then every 20 and 50.</p>`},
+    ])}
+    <p class="muted small">XP values per task come from the wiki's SkyBlock Levels task list. "Your XP" is worked out from your profile, so it can be a little off where Hypixel doesn't share the exact task (e.g. Essence Shop perks are approximate).</p>`;
+}
+// ---------- Crimson Isle: factions, Dojo, Kuudra, daily tasks (profile: nether_island_player_data; rules from the wiki) ----------
+const DOJO_TESTS = [["mob_kb","Force","Knock the zombies into the lava: iron helmets 10, gold 20, baby zombies with diamond helmets 30. Don't hit the negative-point ones."],
+  ["wall_jump","Stamina","Walk or jump through the gaps in the moving walls; points build up the longer you stay on the platform."],
+  ["archer","Mastery","Shoot the wool targets just before they vanish: red is worth 32, yellow 16, green 8. Account for your ping."],
+  ["sword_swap","Discipline","Hit each zombie with the sword that matches its helmet: leather → wood, iron → iron, gold → gold, diamond → diamond."],
+  ["snake","Swiftness","Always stand on the newest green block; orange and red ones are about to disappear."],
+  ["lock_head","Control","Keep your crosshair on the moving skeleton. Accurate staring gives points and more time."],
+  ["fireball","Tenacity","Dodge the ghast fireballs and stay on the platform; more ghasts join over time."]];
+const dojoGrade = p => p >= 1000 ? "S" : p >= 800 ? "A" : p >= 600 ? "B" : p >= 400 ? "C" : p >= 200 ? "D" : "F";
+const KUUDRA_TIERS = [["none","Basic",0,20],["hot","Hot",1000,40],["burning","Burning",3000,60],["fiery","Fiery",7000,80],["infernal","Infernal",12000,100]];
+const MINIBOSSES = [["BLADESOUL","Bladesoul","the Stronghold"],["MAGE_OUTLAW","Mage Outlaw","the Mage Outlaw camp"],["BARBARIAN_DUKE_X","Barbarian Duke X","the Barbarian Duke X camp"],["ASHFANG","Ashfang","Ruins of Ashfang"],["MAGMA_BOSS","Magma Boss","Magma Chamber (Barbarians' Ugo questline)"]];
+function crimsonData(st){
+  const N = st.raw?.nether_island_player_data || {};
+  const fac = N.selected_faction || null, mage = N.mages_reputation || 0, barb = N.barbarians_reputation || 0, rep = fac === "barbarians" ? barb : fac === "mages" ? mage : Math.max(mage, barb);
+  const tests = DOJO_TESTS.map(([k, name, tip]) => ({k, name, tip, pts:+N.dojo?.["dojo_points_" + k] || 0, time:N.dojo?.["dojo_time_" + k]}));
+  const dojoPts = tests.reduce((a, t) => a + t.pts, 0), belt = DOJO_BELTS.filter(([n]) => dojoPts >= n && (n || dojoPts > 0)).pop(), nextBelt = DOJO_BELTS.find(([n]) => n > dojoPts);
+  const K = N.kuudra_completed_tiers || {}, kBeat = KUUDRA_TIERS.filter(([k]) => K[k] > 0).length;
+  return {N, has:!!st.raw?.nether_island_player_data, fac, mage, barb, rep, tests, dojoPts, belt, nextBelt, K, kBeat};
+}
+function repBar(name, rep, on){
+  const [, title] = factionTitle(rep), next = [1000, 3000, 7000, 12000].find(n => n > rep);
+  return `<div class="tile${on ? " maxed" : ""}"><div class="tname">${name}${on ? ' <span class="pill">your faction</span>' : ""}</div>
+    <div class="tbig">${fmt(rep)}</div><div class="small">${title}${next ? ` · ${fmt(next - rep)} to ${factionTitle(next)[1]}` : ' · <span class="good">max title</span>'}</div>${bar(next ? pct(Math.max(0, rep), next) : 100)}</div>`;
+}
+function viewCrimson(st){
+  const C = crimsonData(st), N = C.N;
+  if (!C.has) return `<div class="empty">No Crimson Isle data in this profile yet. Once you can travel there, follow Elle's questline to join a faction.</div>`;
+  const facName = C.fac === "mages" ? "Mages" : C.fac === "barbarians" ? "Barbarians" : "None yet";
+  const killed = new Set(N.last_minibosses_killed || []);
+  const mat = N.matriarch || {};
+  const rep = `<div class="tiles">${repBar("🔮 Mage reputation", C.mage, C.fac === "mages")}${repBar("🪓 Barbarian reputation", C.barb, C.fac === "barbarians")}</div>
+    <h3 class="ph">Titles</h3><div class="card"><table><tbody>${[[1000,"Friendly",5],[3000,"Trusted",10],[7000,"Honored",20],[12000,"Hero",40]].map(([n, t, x]) => `<tr${C.rep >= n ? ' style="opacity:.65"' : ""}><td><b>${t}</b></td><td>${fmt(n)} rep</td><td class="small">+${x} SkyBlock XP${KUUDRA_TIERS.find(k => k[2] === n) ? ` · unlocks ${KUUDRA_TIERS.find(k => k[2] === n)[1]} Kuudra` : ""}</td><td>${C.rep >= n ? '<span class="good">✓</span>' : `<span class="small muted">${fmt(n - C.rep)} to go</span>`}</td></tr>`).join("")}</tbody></table></div>
+    <details class="card small" open><summary><b>Fastest ways to earn reputation</b></summary><ul>
+      <li><b>Finish your faction's questline</b> from Elle: about +600 (Mages) or +900 (Barbarians).</li>
+      <li><b>Daily faction quests</b> at the Community Center: +30 to +125 each.</li>
+      <li><b>Kill the mini-bosses every day:</b> +20 each (see Daily tasks).</li>
+      <li><b>Run Kuudra daily:</b> +10 / 20 / 30 / 40 / 50 from Basic to Infernal.</li>
+      <li><b>Small dailies:</b> Rollim or Kaus fights (+25 a day for 7 days), Pablo's flower every 2 days (+25).</li>
+      <li>Killing the other faction's people only helps when your rep with them is negative; killing your own costs 5.</li></ul></details>`;
+  const dojo = `<div class="card"><table><thead><tr><th>Test</th><th>Points</th><th>Grade</th><th style="width:22%"></th><th>How to score</th></tr></thead><tbody>
+    ${C.tests.slice().sort((a, b) => a.pts - b.pts).map(t => `<tr${t.pts >= 1000 ? ' style="opacity:.65"' : ""}><td><b>Test of ${t.name}</b></td><td>${fmt(t.pts)}</td><td><span class="pill">${dojoGrade(t.pts)}</span></td><td>${bar(pct(Math.min(t.pts, 1000), 1000))}</td><td class="small">${esc(t.tip)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <h3 class="ph">Belts</h3><div class="tiles">${DOJO_BELTS.map(([n, b, x]) => `<div class="tile${C.dojoPts >= n && C.dojoPts > 0 ? " maxed" : ""}"><div class="tname">🥋 ${b} Belt</div><div class="small">${n ? fmt(n) + " points" : "any score"} · +${x} SkyBlock XP</div>${C.dojoPts >= n && C.dojoPts > 0 ? '<div class="small good">✓ earned</div>' : `<div class="small muted">${fmt(n - C.dojoPts)} to go</div>`}</div>`).join("")}</div>
+    <p class="muted small">Belts count your best score in all 7 tests added up; points over 1,000 in one test still count, so a strong test can make up for a weak one. Lowest tests are listed first. S (1,000+) in a test also gives SkyBlock XP.</p>`;
+  const kuudra = `<div class="card"><table><thead><tr><th>Tier</th><th>Needs</th><th>Your runs</th><th>Best wave</th><th></th></tr></thead><tbody>
+    ${KUUDRA_TIERS.map(([k, n, r, x], i) => { const open = i === 0 || (C.rep >= r && C.K[KUUDRA_TIERS[i - 1][0]] > 0);
+      return `<tr><td><b>${n}</b></td><td class="small">${i ? `${fmt(r)} rep in a faction + beat ${KUUDRA_TIERS[i - 1][1]}` : "Elle's questline"}</td><td>${fmt(C.K[k] || 0)}</td><td>${C.K["highest_wave_" + k] || "—"}</td>
+        <td class="small">${C.K[k] > 0 ? '<span class="good">✓ beaten</span>' : open ? '<span class="good">unlocked</span>' : '<span class="muted">locked</span>'} · +${x} SkyBlock XP first clear</td></tr>`; }).join("")}
+    </tbody></table></div>
+    <p class="muted small">Each tier gives more reputation per daily run. Burning and up need a pickaxe to break the orbs in Kuudra's stomach; Infernal adds a final phase where every death is final.</p>`;
+  const daily = `<div class="card"><table><thead><tr><th>Mini-boss</th><th>Where</th><th></th></tr></thead><tbody>
+    ${MINIBOSSES.map(([k, n, w]) => `<tr><td><b>${n}</b></td><td class="small">${w}</td><td class="small">${killed.has(k) ? '<span class="good">✓ killed recently</span>' : '<span class="muted">not in your recent kills</span>'}</td></tr>`).join("")}
+    </tbody></table></div><p class="muted small">Each mini-boss gives +20 reputation once a day. Hypixel only shares which ones you killed most recently, so ✓ means "recently", not necessarily today.</p>
+    <h3 class="ph">Other daily things</h3><div class="card"><table><tbody>
+      <tr><td><b>🐷 Matriarch</b></td><td class="small">${mat.pearls_collected != null ? `${fmt(mat.pearls_collected)} Heavy Pearls collected` : "no attempts recorded"}${mat.last_attempt ? ` · last attempt ${untilTxt(Date.now() - mat.last_attempt)} ago` : ""}</td></tr>
+      <tr><td><b>📜 Faction quests</b></td><td class="small">daily quests at your faction's Community Center, +30 to +125 reputation each</td></tr>
+      <tr><td><b>🦑 Kuudra</b></td><td class="small">one daily reputation bonus per run, more at higher tiers</td></tr>
+      <tr><td><b>🥋 Dojo</b></td><td class="small">retry your lowest test (no daily limit)</td></tr></tbody></table></div>`;
+  return `<div class="grid compact">
+      ${statCard("⚔ Faction", facName, C.fac ? `${factionTitle(C.rep)[1]} · ${fmt(C.rep)} rep` : "join one through Elle's questline", C.fac ? pct(Math.min(C.rep, 12000), 12000) : null)}
+      ${statCard("🥋 Dojo", C.belt ? `${C.belt[1]} Belt` : "No belt", `${fmt(C.dojoPts)} points${C.nextBelt ? ` · ${fmt(C.nextBelt[0] - C.dojoPts)} to ${C.nextBelt[1]}` : " · max belt"}`, pct(Math.min(C.dojoPts, 7000), 7000))}
+      ${statCard("🦑 Kuudra", `${C.kBeat}/5 tiers`, `${fmt(KUUDRA_TIERS.reduce((a, [k]) => a + (C.K[k] || 0), 0))} runs in total`, pct(C.kBeat, 5))}
+      ${statCard("📱 Abiphone", (dig(N, "abiphone.active_contacts") || []).length, "contacts", null)}
+    </div>
+    ${subTabs("crimson", [
+      {id:"rep", label:"⚔ Reputation", html:rep},
+      {id:"dojo", label:"🥋 Dojo", count:C.tests.filter(t => t.pts < 1000).length || null, html:dojo},
+      {id:"kuudra", label:"🦑 Kuudra", html:kuudra},
+      {id:"daily", label:"✅ Daily tasks", html:daily},
+      {id:"shards", label:"🔮 Shards", html:`<div data-shard-ctx="crimson,kuudra" data-title="Every shard for the Crimson Isle and Kuudra" data-open="1"></div>`},
+    ])}`;
+}
 // ---------- history ----------
 function snapshot(st, A){
   return {t: Date.now(), sbLevel: +st.sbLevel.toFixed(2), skillAvg: +A.skillAvg.toFixed(2), museum: A.museum.have, mp: A.acc.mp,
@@ -3542,7 +3823,7 @@ function snapshot(st, A){
           slayerXp: Math.round(st.slayers.reduce((a,s)=>a+s.xp,0)), slayerLv: st.slayers.reduce((a, s) => a + s.level, 0),
           petScore: (st.pets || []).length ? petData(st).score : null,
           hotm: (() => { const x = st.raw?.mining_core?.experience ?? st.raw?.skill_tree?.experience?.mining; if (x == null) return null; const t = HOTM_XP.filter(v => x >= v).length, n = HOTM_XP[t]; return +(t + (n ? (x - HOTM_XP[t - 1]) / (n - HOTM_XP[t - 1]) : 0)).toFixed(2); })(),
-          riftSouls: st.raw?.rift ? (st.raw.rift.enigma?.found_souls || []).length : null};
+          riftSouls: st.raw?.rift ? (st.raw.rift.enigma?.found_souls || []).length : null, ...extraSnap(st, A)};
 }
 function saveHistory(key, snap){
   const h = store.get("hist:" + key, []);
@@ -3555,8 +3836,8 @@ function saveHistory(key, snap){
 
 // ---------- rendering ----------
 let CUR = null; // {st, A, hist}
-const TAB_GROUPS = [["", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"]]], ["Progress", [["skills","📊 Skills"],["coll","📦 Collections"],["bestiary","👾 Bestiary"],["pets","🐾 Pets"],["museum","🏛 Museum"],["acc","💍 Accessories"],["minions","🤖 Minions"],["upgrades","⬆ Upgrades"]]],
-  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"]]], ["Islands", [["garden","🌾 Farming & Garden"],["fishing","🎣 Fishing"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["rift","🌀 Rift"]]], ["", [["shards","🔮 Shards"]]],
+const TAB_GROUPS = [["", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"]]], ["Progress", [["sblevel","⭐ SkyBlock Level"],["skills","📊 Skills"],["coll","📦 Collections"],["bestiary","👾 Bestiary"],["pets","🐾 Pets"],["museum","🏛 Museum"],["acc","💍 Accessories"],["minions","🤖 Minions"],["upgrades","⬆ Upgrades"]]],
+  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"]]], ["Islands", [["garden","🌾 Farming & Garden"],["fishing","🎣 Fishing"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["crimson","🔥 Crimson Isle"],["rift","🌀 Rift"]]], ["", [["shards","🔮 Shards"]]],
   ["Shopping", [["plan","🛒 Plan"],["auto","🤖 Auto bulk plan"]]], ["", [["history","📈 History"]]]];
 const TABS = TAB_GROUPS.flatMap(g => g[1]);
 let tab = store.get("tab", "focus");
@@ -3602,7 +3883,7 @@ function render(){
   const v = $("#view");
   const off = st.apiOff.length ? `<div class="msg err">No data for: <b>${st.apiOff.map(esc).join(", ")}</b>. Turn on these API settings in-game (SkyBlock Menu → Settings → API Settings), wait a few minutes, then reload.</div>` : "";
   const demo = st.demo ? `<div class="msg">Showing <b>made-up demo data</b>. Enter your username and API key to see your real progress.</div>` : "";
-  v.innerHTML = demo + off + ({focus:viewFocus, map:viewMap, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, history:viewHistory}[tab])(st, A);
+  v.innerHTML = demo + off + ({focus:viewFocus, sblevel:viewSbLevel, crimson:viewCrimson, map:viewMap, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, history:viewHistory}[tab])(st, A);
   limitRows(v);
   setTimeout(fillShardCtx, 0);
   v.querySelectorAll("[data-filter]").forEach(inp => inp.addEventListener("input", () => filterTable(inp)));
@@ -3614,9 +3895,11 @@ function filterTable(inp){
   t.querySelectorAll("tbody tr, .tile").forEach(r => r.style.display = r.textContent.toLowerCase().includes(q) ? "" : "none");
 }
 
+const STAT_GO = [[/^skyblock level/i,"sblevel"],[/^forge$/i,"mining"],[/^faction|^dojo/i,"crimson"],[/^museum/i,"museum"],[/magical power/i,"acc"],[/^collections$|tiers unlocked/i,"coll"],[/^catacombs/i,"combat"],[/skill average/i,"skills"],[/pet score|unique pets/i,"pets"],[/fairy souls/i,"map"],[/minion slots|unique crafts/i,"minions"],[/bestiary milestone/i,"bestiary"],[/garden level/i,"garden"],[/^trophy fish/i,"fishing"],[/^heart of the forest/i,"foraging"],[/heart of the mountain/i,"mining"]];
 function statCard(title, big, sub, p){
-  const [ic, t] = splitIcon(title);
-  return `<div class="card stat"><div class="sthead">${ic ? `<span class="sticon">${ic}</span>` : ""}<h3>${t}</h3></div><div class="big">${big}</div>${sub ? `<div class="muted small">${sub}</div>` : ""}${p != null ? bar(p) : ""}</div>`;
+  const [ic, t] = splitIcon(title), plain = String(t).replace(/<[^>]*>/g, "").trim(), go = (STAT_GO.find(([re]) => re.test(plain)) || [])[1];
+  const jump = go && go !== tab ? ` clk" data-go="${go}" title="Open ${esc(plain)}` : "";
+  return `<div class="card stat${jump}"><div class="sthead">${ic ? `<span class="sticon">${ic}</span>` : ""}<h3>${t}</h3></div><div class="big">${big}</div>${sub ? `<div class="muted small">${sub}</div>` : ""}${p != null ? bar(p) : ""}</div>`;
 }
 
 function viewFocus(st, A){
@@ -3628,10 +3911,11 @@ function viewFocus(st, A){
     ${statCard("Magical power", A.acc.mp + deltaOf("mp"), `${A.acc.ownedFamilies}/${A.acc.families} accessory families${st.mpReported ? ` · in-game best: ${st.mpReported}` : ""}`, A.acc.pct)}
     ${statCard("Collections", `${A.coll.tiers}/${A.coll.max}` + deltaOf("collTiers"), `${A.coll.maxed} maxed · ${A.coll.unlocked}/${A.coll.count} started`, A.coll.pct)}
     ${statCard("Catacombs", st.cata.level + deltaOf("cata",2), `Slayers ${A.slayerPct}% complete`, A.cataPct)}
+    ${forgeCard(st)}
   </div>
   <div class="section"><h2>What to focus on</h2>
     <p class="muted small">Areas are ordered from least to most complete. Work on the top ones first.</p>
-    <div class="tiles wide">${pr.map((a,i) => `<div class="tile prio-tile${i < 3 ? " hot" : ""}">
+    <div class="tiles wide">${pr.map((a,i) => `<div class="tile prio-tile${i < 3 ? " hot" : ""}" data-go="${a.key}" title="Open ${esc(String(a.name).replace(/<[^>]*>/g, ""))}">
       <div class="trow">${ring(a.pct, `<b>${Math.round(a.pct)}%</b>`)}<div style="flex:1;min-width:0"><div class="tname"><span class="rank">#${i+1}</span> ${a.name}</div>${bar(a.pct)}</div></div>
       <ul class="ttips">${a.tips.map(t => `<li>${t}</li>`).join("")}</ul>
       <a href="#" class="tlink" onclick="tab='${a.key}';store.set('tab',tab);render();return false">Open ${a.name} →</a>
@@ -3709,13 +3993,13 @@ function museumGuideHTML(st, M){
     let run = 0, runXp = 0;
     cheap = `<h3 class="small muted" style="margin:14px 0 6px">2 · Cheapest museum XP per coin</h3>
       <div class="card"><table data-limit="10"><thead><tr><th>Item</th><th>XP</th><th>Price</th><th>Coins per XP</th><th>Running total</th><th></th></tr></thead><tbody>
-      ${priced.map(({m, p}) => { run += p; runXp += m.xp; return `<tr><td>${m.tier ? rar(m.tier, m.name) : esc(m.name)}</td><td>${m.xp}</td><td>${fmt(p)}</td><td><b>${fmt(p / m.xp)}</b></td><td class="muted small">${fmt(run)} → +${runXp} XP</td><td class="acts">${acts(m.pieceIds || [m.id], m.name)}</td></tr>`; }).join("") || `<tr><td colspan="6" class="muted">No priced items left.</td></tr>`}
+      ${priced.map(({m, p}) => { run += p; runXp += m.xp; return `<tr><td>${ilink(m.id, m.tier ? rar(m.tier, m.name) : esc(m.name))}</td><td>${m.xp}</td><td>${fmt(p)}</td><td><b>${fmt(p / m.xp)}</b></td><td class="muted small">${fmt(run)} → +${runXp} XP</td><td class="acts">${acts(m.pieceIds || [m.id], m.name)}</td></tr>`; }).join("") || `<tr><td colspan="6" class="muted">No priced items left.</td></tr>`}
       </tbody></table></div>
       <p class="muted small">Prices are Bazaar / lowest BIN to buy outright. Crafting can be cheaper; use the guide button to compare.</p>`;
   } else cheap = `<p class="muted">Loading prices for the cheapest-XP list…</p>`;
   return `<div>
     <h3 class="small muted" style="margin:4px 0 6px">1 · Donate what you already own (${ownNow.length} item${ownNow.length === 1 ? "" : "s"}, +${ownNow.reduce((a, m) => a + m.xp, 0)} XP)</h3>
-    ${ownNow.length ? `<div class="card"><table data-limit="8"><tbody>${ownNow.map(m => `<tr><td>${m.tier ? rar(m.tier, m.name) : esc(m.name)}</td><td>${esc(m.category)}</td><td>+${m.xp} XP</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">Nothing found in your storage that isn't donated yet.</p>`}
+    ${ownNow.length ? `<div class="card"><table data-limit="8"><tbody>${ownNow.map(m => `<tr><td>${ilink(m.id, m.tier ? rar(m.tier, m.name) : esc(m.name))}</td><td>${esc(m.category)}</td><td>+${m.xp} XP</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">Nothing found in your storage that isn't donated yet.</p>`}
     ${cheap}
     <h3 class="small muted" style="margin:14px 0 6px">3 · Then work through the rest in game-stage order ("All missing items" tab)</h3>
     ${tips}</div>`;
@@ -3737,7 +4021,7 @@ function viewMuseum(st, A){
       <span class="muted small">Donating an upgraded version (e.g. a tier-3 hoe) also counts its lower tiers.</span></div>
     <div class="card"><table id="mtab" data-limit="25"><thead><tr><th>Item</th><th>Type</th><th>Category</th><th>Stage</th><th>XP</th><th></th></tr></thead><tbody>
     ${rows.map(m => { const ids = m.pieceIds || [m.id]; const have = ids.every(id => st.items?.[id]);
-      return `<tr><td>${m.tier ? rar(m.tier, m.name) : esc(m.name)}${have ? '<span class="badge b-owned">In your storage — donate it!</span>' : ""}${m.pieces ? `<div class="muted small">${m.pieces.map(esc).join(", ")}</div>` : ""}</td><td>${m.kind}</td><td>${esc(m.category)}</td><td><span class="pill">${esc(m.stage)}</span></td><td>${m.xp}</td><td class="acts">${acts(ids, m.name)}</td></tr>`; }).join("")}
+      return `<tr><td>${ilink(m.id, m.tier ? rar(m.tier, m.name) : esc(m.name))}${have ? '<span class="badge b-owned">In your storage — donate it!</span>' : ""}${m.pieces ? `<div class="muted small">${m.pieces.map(esc).join(", ")}</div>` : ""}</td><td>${m.kind}</td><td>${esc(m.category)}</td><td><span class="pill">${esc(m.stage)}</span></td><td>${m.xp}</td><td class="acts">${acts(ids, m.name)}</td></tr>`; }).join("")}
     </tbody></table></div>`;
   return `<div class="grid compact">
     ${statCard("Donated", `${M.have}/${M.total}`, `${M.pct}%${st.museumSpecial ? ` · ${st.museumSpecial} special items` : ""}`, M.pct)}
@@ -3758,12 +4042,12 @@ function viewAcc(st, A){
   const miss = C.missing.slice().sort(sort === "mp" ? (a,b) => b.gainTop - a.gainTop : (a,b) => RARITIES.indexOf(a.first.tier) - RARITIES.indexOf(b.first.tier) || a.first.name.localeCompare(b.first.name));
   const ups = C.upgrades.slice().sort((a,b) => b.gain - a.gain);
   const upHTML = `<div class="card"><table data-limit="20"><thead><tr><th>You have</th><th>Next upgrade</th><th>MP gain</th><th>Family top</th><th></th></tr></thead><tbody>
-    ${ups.map(u => `<tr><td>${rar(u.from.tier, u.from.name)}</td><td>${rar(u.to.tier, u.to.name)}</td><td>+${u.gain}</td><td>${rar(u.top.tier, u.top.name)}</td><td class="acts">${acts([u.to.id], u.to.name)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nothing to upgrade.</td></tr>`}
+    ${ups.map(u => `<tr><td>${ilink(u.from.id, rar(u.from.tier, u.from.name))}</td><td>${ilink(u.to.id, rar(u.to.tier, u.to.name))}</td><td>+${u.gain}</td><td>${rar(u.top.tier, u.top.name)}</td><td class="acts">${acts([u.to.id], u.to.name)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nothing to upgrade.</td></tr>`}
     </tbody></table></div>`;
   const missHTML = `<div class="toolbar"><input data-filter="atab" placeholder="Filter…">
       <select data-sort="acc"><option value="cheap" ${sort==="cheap"?"selected":""}>Lowest rarity first (usually cheapest)</option><option value="mp" ${sort==="mp"?"selected":""}>Most MP (best version) first</option></select></div>
     <div class="card"><table id="atab" data-limit="25"><thead><tr><th>Start with</th><th>MP</th><th>Best version</th><th>MP</th></tr></thead><tbody>
-    ${miss.map(m => `<tr><td>${rar(m.first.tier, m.first.name)}<div>${acts([m.first.id], m.first.name)}</div></td><td>${m.gainFirst}</td><td>${m.size > 1 ? rar(m.top.tier, m.top.name) + `<div>${acts([m.top.id], m.top.name)}</div>` : '<span class="muted">—</span>'}</td><td>${m.size > 1 ? m.gainTop : ""}</td></tr>`).join("")}
+    ${miss.map(m => `<tr><td>${ilink(m.first.id, rar(m.first.tier, m.first.name))}<div>${acts([m.first.id], m.first.name)}</div></td><td>${m.gainFirst}</td><td>${m.size > 1 ? rar(m.top.tier, m.top.name) + `<div>${acts([m.top.id], m.top.name)}</div>` : '<span class="muted">—</span>'}</td><td>${m.size > 1 ? m.gainTop : ""}</td></tr>`).join("")}
     </tbody></table></div>`;
   return `<div class="grid compact">
     ${statCard("Magical power (est.)", C.mp, `${C.mpExtra?.length ? "incl. " + C.mpExtra.map(([n, v]) => `${n} +${v}`).join(", ") + ". " : ""}${st.mpReported ? `In-game best: ${st.mpReported}` : "Enrichments not counted"}`, null)}
@@ -3987,7 +4271,7 @@ const allFamilies = st => BESTIARY_ALL.flatMap(([area, fams]) => fams.map(f => f
 const goTab = (k, label) => `<a href="#" class="small" onclick="tab='${k}';store.set('tab',tab);render();return false">${label} →</a>`;
 function famTable(rows, limit, id){
   return `<div class="card"><table ${id ? `id="${id}"` : ""} data-limit="${limit}"><thead><tr><th>Family</th><th>Area</th><th>Kills</th><th style="width:26%">Tier</th></tr></thead><tbody>
-    ${rows.map(f => `<tr${f.tier >= f.max ? ' style="opacity:.65"' : ""}><td><b>${esc(f.name)}</b></td><td class="small muted">${esc(f.area)}</td><td>${fmt(f.kills)}</td>
+    ${rows.map(f => `<tr class="clk" data-mob="${esc(f.area)}|${esc(f.name)}"${f.tier >= f.max ? ' style="opacity:.65"' : ""}><td><b>${esc(f.name)}</b></td><td class="small muted">${esc(f.area)}</td><td>${fmt(f.kills)}</td>
       <td class="small">Tier ${f.tier}/${f.max}${f.tier >= f.max ? ' <span class="good">maxed</span>' : `${bar(pct(f.kills - f.prev, f.next - f.prev))}<span class="muted">${fmt(f.next - f.kills)} more for tier ${f.tier + 1}</span>`}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Nothing here.</td></tr>`}
     </tbody></table></div>`;
 }
@@ -4046,7 +4330,7 @@ function viewFishing(st){
   const tick = (on, x) => on ? `<span class="good" title="${x}">✓</span>` : `<span class="muted" title="${x}">·</span>`;
   const trophy = `${hasT ? "" : `<div class="msg">No Trophy Fish data in your profile.</div>`}
     <div class="card"><table><thead><tr><th>Fish</th><th>Where / how</th><th>Caught</th><th>🥉</th><th>🥈</th><th>🥇</th><th>💎</th><th>Pity</th></tr></thead><tbody>
-    ${fish.map(f => `<tr${f.best === 3 ? ' style="opacity:.65"' : ""}><td><b>${esc(f.name)}</b><div class="muted small">${f.rar}</div></td><td class="small">${esc(f.where)}</td><td>${fmt(f.total)}</td>
+    ${fish.map(f => `<tr class="clk" data-tfish="${f.k}"${f.best === 3 ? ' style="opacity:.65"' : ""}><td><b>${esc(f.name)}</b><div class="muted small">${f.rar}</div></td><td class="small">${esc(f.where)}</td><td>${fmt(f.total)}</td>
       ${f.got.map((g, i) => `<td>${tick(g, TROPHY_TIERS[i])}</td>`).join("")}
       <td class="small">${!f.got[2] ? `${Math.max(0, 100 - f.total)} catches to a guaranteed 🥇` : !f.got[3] ? `${Math.max(0, 600 - f.total)} catches to a guaranteed 💎` : '<span class="good">all tiers</span>'}</td></tr>`).join("")}
     </tbody></table></div>
@@ -4083,7 +4367,7 @@ function viewGarden(st){
     return {id, amt, tier, max:steps.length, prev:sum, next:steps[tier] != null ? sum + steps[tier] : null, up, copper:CROP_UPGRADE_COPPER.slice(up).reduce((a, b) => a + b, 0)};
   });
   const msPane = !g ? `<div class="msg">No Garden data, so crop milestones can't be shown.</div>` : `<div class="card"><table><thead><tr><th>Crop</th><th>Milestone</th><th style="width:28%"></th><th>Harvested on the Garden</th><th>Crop upgrade</th></tr></thead><tbody>
-    ${crops.sort((a, b) => a.tier - b.tier).map(c => `<tr><td><b>${esc(cropLabel(c.id))}</b></td><td>${c.tier}/${c.max}</td><td>${c.next ? `${bar(pct(c.amt - c.prev, c.next - c.prev))}<span class="muted small">${fmt(c.next - c.amt)} more</span>` : '<span class="good small">maxed</span>'}</td>
+    ${crops.sort((a, b) => a.tier - b.tier).map(c => `<tr><td><b>${ilink(c.id, esc(cropLabel(c.id)))}</b></td><td>${c.tier}/${c.max}</td><td>${c.next ? `${bar(pct(c.amt - c.prev, c.next - c.prev))}<span class="muted small">${fmt(c.next - c.amt)} more</span>` : '<span class="good small">maxed</span>'}</td>
       <td class="small">${fmt(c.amt)}</td><td class="small">${c.up}/9${c.copper ? `<div class="muted">${fmt(c.copper)} copper to max</div>` : ""}</td></tr>`).join("")}
     </tbody></table></div><p class="muted small">Crop milestones count only crops you break yourself on the Garden. Each milestone gives Garden XP, Farming XP and SkyBlock XP; each crop upgrade is +5 Crop Fortune. Thresholds from the NEU repo, copper costs from the wiki.</p>`;
   // visitors
@@ -4170,19 +4454,19 @@ function viewMinions(st){
       next.sort((a, b) => (a.c.missing.length > 0) - (b.c.missing.length > 0) || a.c.coins - b.c.coins);
       const x = next.shift(); run += x.c.coins; cnt++;
       const slot = MINION_SLOTS.find(([c]) => c === cnt);
-      steps.push({name:x.m.name, t:x.t, c:x.c, run, cnt, slot, recipe:x.m.tiers[x.t - 1]});
+      steps.push({id:x.m.id, name:x.m.name, t:x.t, c:x.c, run, cnt, slot, recipe:x.m.tiers[x.t - 1]});
       if (x.t + 1 <= x.m.max && x.m.tiers[x.t]) next.push({m:x.m, t:x.t + 1});
     }
     plan = !nextSlot ? `<p class="good">You have every minion slot from crafting.</p>` : `<p class="muted small">The cheapest unique crafts to reach your next two slots, buying everything on the Bazaar right now. Crafting a tier uses up the tier below it, so you need to own that minion.</p>
       <div class="card"><table><thead><tr><th>#</th><th>Craft</th><th>Ingredients</th><th>Cost</th><th>Running total</th></tr></thead><tbody>
-      ${steps.map(s => `<tr${s.slot ? ' style="background:var(--hl, rgba(80,160,255,.08))"' : ""}><td class="small muted">${s.cnt}</td><td><b>${esc(s.name)} ${s.t}</b>${s.slot ? ` <span class="pill">slot ${s.slot[1]}</span>` : ""}</td>
-        <td class="small">${s.recipe.split(" ").map(p => { const [id, n] = p.split("*"); return `${n ? n + "× " : ""}${esc(nameOf(id))}`; }).join(", ")}</td>
+      ${steps.map(s => `<tr class="clk" data-minion="${s.id}"${s.slot ? ' style="background:var(--hl, rgba(80,160,255,.08))"' : ""}><td class="small muted">${s.cnt}</td><td><b>${esc(s.name)} ${s.t}</b>${s.slot ? ` <span class="pill">slot ${s.slot[1]}</span>` : ""}</td>
+        <td class="small">${s.recipe.split(" ").map(p => { const [id, n] = p.split("*"); return `${n ? n + "× " : ""}${ilink(id)}`; }).join(", ")}</td>
         <td class="small">${fmt(s.c.coins)}${s.c.missing.length ? `<div class="muted">+ ${s.c.missing.map(nameOf).map(esc).join(", ")} (no price)</div>` : ""}</td><td class="small"><b>${fmt(s.run)}</b></td></tr>`).join("")}
       </tbody></table></div>`;
   }
   const all = `<div class="toolbar"><input type="search" placeholder="Filter minions…" data-filter="minAll" style="width:220px"></div>
     <div class="card"><table id="minAll" data-limit="20"><thead><tr><th>Minion</th><th>Crafted</th><th style="width:26%"></th><th>Missing tiers</th></tr></thead><tbody>
-    ${mins.slice().sort((a, b) => a.n / a.max - b.n / b.max).map(m => `<tr${m.n === m.max ? ' style="opacity:.65"' : ""}><td><b>${esc(m.name)}</b></td><td>${m.n}/${m.max}</td><td>${bar(pct(m.n, m.max))}</td>
+    ${mins.slice().sort((a, b) => a.n / a.max - b.n / b.max).map(m => `<tr class="clk" data-minion="${m.id}"${m.n === m.max ? ' style="opacity:.65"' : ""}><td><b>${esc(m.name)}</b></td><td>${m.n}/${m.max}</td><td>${bar(pct(m.n, m.max))}</td>
       <td class="small">${m.n === m.max ? '<span class="good">all crafted</span>' : m.have.map((h, i) => h ? "" : i + 1).filter(Boolean).join(", ")}</td></tr>`).join("")}
     </tbody></table></div>`;
   return `<div class="grid compact">
@@ -4555,7 +4839,7 @@ const mapSec = (t, n) => `<span class="mstat"><b>${n}</b> ${t}</span>`;
 function seaRows(st, list){
   const lv = skillLv(st, "FISHING"), fams = allFamilies(st), byName = Object.fromEntries(fams.map(f => [f.name.toLowerCase(), f]));
   return `<div class="card"><table data-limit="12"><thead><tr><th>Sea creature</th><th>Fishing</th><th>Chance</th><th>Your kills</th></tr></thead><tbody>
-    ${list.map(([n, r, l, c, w]) => { const fm = byName[n.toLowerCase()]; return `<tr${l > lv ? ' style="opacity:.6"' : ""}><td>${rar(String(r).toUpperCase(), n)}${w ? `<div class="muted small">${esc(w)}</div>` : ""}</td>
+    ${list.map(([n, r, l, c, w]) => { const fm = byName[n.toLowerCase()]; return `<tr${fm ? ` class="clk" data-mob="${esc(fm.area)}|${esc(fm.name)}"` : ""}${l > lv ? ' style="opacity:.6"' : ""}><td>${rar(String(r).toUpperCase(), n)}${w ? `<div class="muted small">${esc(w)}</div>` : ""}</td>
       <td class="small">${l > lv ? `🔒 ${l}` : `<span class="good">✓ ${l}</span>`}</td><td class="small">${esc(c || "—")}</td>
       <td class="small">${fm ? `${fmt(fm.kills)} · tier ${fm.tier}/${fm.max}` : '<span class="muted">—</span>'}</td></tr>`; }).join("")}
     </tbody></table></div>`;
@@ -4584,7 +4868,7 @@ function mapPanelHTML(st, A, id){
     + (extraMobs.length ? `<h4>${fams.length ? "Also found here" : "Mobs found here"}</h4><div class="mzones">${extraMobs.map(m => `<span>${esc(m)}</span>`).join("")}</div>` : "");
   const fish = (X.sea || []).length ? `${i.id === "hub" ? `<p class="muted small">Basic sea creatures can be fished from water on most islands (not the Bayou, Lotus Atoll, Galatea or Jerry's Workshop). Spooky and shark creatures only appear during their festivals.</p>` : ""}${seaRows(st, X.sea)}` : "";
   const npcs = (X.npcs || []).length ? `<div class="card"><table data-limit="15"><thead><tr><th>NPC</th><th>Shop</th><th>X Y Z</th></tr></thead><tbody>
-    ${X.npcs.map(([n, shop, x, y, z]) => `<tr><td><b>${esc(n)}</b></td><td class="small">${shop ? `🛒 ${shop} item${shop === 1 ? "" : "s"}` : '<span class="muted">—</span>'}</td><td class="small mono">${x ?? ""} ${y ?? ""} ${z ?? ""}</td></tr>`).join("")}
+    ${X.npcs.map(([n, shop, x, y, z]) => `<tr class="clk" data-npc="${i.id}|${esc(n)}"><td><b>${esc(n)}</b></td><td class="small">${shop ? `🛒 ${shop} item${shop === 1 ? "" : "s"}` : '<span class="muted">—</span>'}</td><td class="small mono">${x ?? ""} ${y ?? ""} ${z ?? ""}</td></tr>`).join("")}
     </tbody></table></div><p class="muted small">NPC list and positions from the NEU repo.</p>` : "";
   const panes = [{id:"over", label:"Overview", html:overview}];
   if (MAP_INFO[i.id]) panes.push({id:"guide", label:"📖 Guide", html:guidePaneHTML(i)});
@@ -4657,6 +4941,145 @@ document.addEventListener("click", e => {
 document.addEventListener("keydown", e => { const g = e.target.closest?.("[data-isl]"); if (g && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); mapSelect(g.dataset.isl); } });
 document.addEventListener("input", e => { if (e.target.id !== "mapQ") return; MAP.q = e.target.value; store.set("mapQ", MAP.q); mapRefilter(); });
 
+// ---------- details popups: click almost anything to see more ----------
+const ilink = (id, html) => id ? `<a href="#" class="ilink" data-recipe="${esc(id)}" title="Click for recipe, price and wiki">${html ?? esc(nameOf(id))}</a>` : (html ?? "");
+function openInfo(title, body){
+  const m = $("#modal");
+  if (m.classList.contains("on") && m.querySelector(".box")) modalBack.push(m.innerHTML); else modalBack.length = 0;
+  m.classList.add("on");
+  m.innerHTML = `<div class="box"><div class="head"><h2>${title}</h2><div>${modalBack.length ? '<button class="ghost" data-mback>← Back</button>' : ""}<button class="ghost" data-close>Close</button></div></div>${body}</div>`;
+  limitRows(m);
+}
+const infoStats = list => `<div class="grid compact" style="margin-bottom:12px">${list.filter(Boolean).map(([t, b, s, p]) => statCard(t, b, s, p)).join("")}</div>`;
+// a collection: every tier with its amount and unlocks
+function openCollection(id){
+  const st = CUR?.st, c = st?.collections.find(x => x.id === id); if (!c) return;
+  const it = Object.values(RES.collections).flatMap(x => Object.entries(x.items)).find(([k]) => k === id)?.[1]; if (!it) return;
+  const rows = it.tiers.map((t, i) => { const done = c.amount >= t.amountRequired;
+    return `<tr${done ? ' class="done"' : i === c.tier ? ' style="background:rgba(245,184,61,.08)"' : ""}><td><b>${t.tier}</b></td><td>${fmt(t.amountRequired)}</td>
+      <td class="small">${(t.unlocks || []).map(u => esc(stripMc(u))).join("<br>") || '<span class="muted">—</span>'}</td><td>${done ? '<span class="good">✓</span>' : `<span class="small muted">${fmt(t.amountRequired - c.amount)} to go</span>`}</td></tr>`; }).join("");
+  openInfo(`${COLL_ICON[c.cat] || "📦"} ${esc(c.name)} <span class="muted small">${esc(c.cat)} collection</span>`,
+    infoStats([["Tier", `${c.tier}/${c.maxTiers}`, c.tier >= c.maxTiers ? "Maxed" : `next at ${fmt(c.next)}`, pct(c.tier, c.maxTiers)], ["You have", fmt(c.amount), "co-op total", null],
+      c.next ? ["To next tier", fmt(c.next - c.amount), `${pct(c.amount - c.prev, c.next - c.prev)}% of the way`, pct(c.amount - c.prev, c.next - c.prev)] : null])
+    + `<div class="card"><table><thead><tr><th>Tier</th><th>Amount</th><th>Unlocks</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="small">${ilink(id, `📖 Recipe, price and wiki for ${esc(c.name)}`)}</p>`);
+}
+// a pet you own
+function openPet(key){
+  const st = CUR?.st; if (!st) return;
+  const D = petData(st), [type, tier, idx] = key.split("|"), p = D.pets.filter(x => x.type === type && x.tier === tier)[+idx || 0]; if (!p) return;
+  const info = PET_LIST.find(x => x[0] === type) || [], sk = info[2] || "";
+  const prices = String(info[1] || "").split("").map(Number).map(ri => [PET_TIERS[ri], petPrice(type, ri)]);
+  const others = D.pets.filter(x => x.type === type && x !== p);
+  openInfo(`🐾 <span style="color:${PET_COLOR[tier] || "inherit"}">${esc(petName(type))}</span> <span class="muted small">${esc(prettyKey(tier))}${sk ? ` · ${esc(prettyKey(sk))} pet` : ""}</span>`,
+    infoStats([["Level", `${p.level}/${p.max}`, p.level >= p.max ? "Max level" : `${fmt(p.toNext)} XP to ${p.level + 1}`, p.level >= p.max ? 100 : p.progress * 100],
+      ["Pet XP", fmt(p.exp), "earned in total", null], ["Pet Score", D.best[type] === p ? `+${PET_POINTS[tier] + (p.level >= p.max ? 1 : 0)}` : "—", D.best[type] === p ? "this copy counts" : "a better copy counts instead", null]])
+    + `<ul class="mtodo">
+      <li><span class="mtag">🎁</span><span>Held item: ${p.heldItem ? ilink(p.heldItem) : '<span class="muted">none</span>'}</span></li>
+      ${p.candyUsed ? `<li><span class="mtag">🍬</span><span>${p.candyUsed} Pet Candy used</span></li>` : ""}
+      ${p.active ? '<li><span class="mtag">⭐</span><span>Your active pet</span></li>' : ""}
+      ${others.length ? `<li><span class="mtag">📋</span><span>You also own: ${others.map(o => `${esc(prettyKey(o.tier))} lv ${o.level}`).join(", ")}</span></li>` : ""}</ul>
+    ${prices.some(x => x[1]) ? `<h4>Lowest BIN by rarity</h4><div class="mzones">${prices.map(([t, pr]) => `<span><b style="color:${PET_COLOR[t] || "inherit"}">${esc(prettyKey(t))}</b> ${pr ? fmt(pr) : "—"}</span>`).join("")}</div>` : '<p class="muted small">Prices load with the Pets tab.</p>'}
+    <p class="small"><a href="https://hypixelskyblock.minecraft.wiki/w/${encodeURIComponent(petName(type).replace(/ /g, "_"))}_Pet" target="_blank" rel="noopener">Open on the wiki ↗</a></p>`);
+}
+// a bestiary family / mob
+function openMob(key){
+  const st = CUR?.st; if (!st) return;
+  const [area, name] = key.split("|"), fam = BESTIARY_ALL.find(a => a[0] === area)?.[1].find(f => f[0] === name); if (!fam) return;
+  const f = famProgress(st.bestiary || {}, area, fam);
+  const th = ((f.critter ? CRITTER_BRACKETS : BESTIARY_BRACKETS)[fam[2]] || []).filter(x => x <= fam[1]); if (th[th.length - 1] !== fam[1]) th.push(fam[1]);
+  const isl = ISLANDS.filter(i => (i.best || []).includes(area));
+  const sea = Object.entries(MAP_EXTRA).flatMap(([id, x]) => (x.sea || []).filter(s => s[0].toLowerCase() === name.toLowerCase()).map(s => [id, s]));
+  const drops = RARE_DROPS[name];
+  openInfo(`👾 ${esc(name)} <span class="muted small">${esc(area)}</span>`,
+    infoStats([["Kills", fmt(f.kills), "your bestiary count", null], ["Bestiary tier", `${f.tier}/${f.max}`, f.tier >= f.max ? "Maxed" : `${fmt(f.next - f.kills)} kill${f.next - f.kills === 1 ? "" : "s"} to tier ${f.tier + 1}`, pct(f.tier, f.max)],
+      ["Bonus now", `+${f.tier * 3}`, "Strength and Magic Find against it", null]])
+    + `${isl.length ? `<p>📍 Found on ${isl.map(i => `<a href="#" data-mapgo="${i.id}">${esc(i.name)}</a>`).join(", ")}</p>` : ""}
+    ${sea.length ? `<p class="small">🎣 Sea creature: ${sea.map(([, s]) => `${rar(String(s[1]).toUpperCase(), s[1])} · Fishing ${s[2]}${s[3] ? ` · ${esc(s[3])} chance` : ""}${s[4] ? ` · ${esc(s[4])}` : ""}`).join("; ")}</p>` : ""}
+    ${drops ? `<h4>Rare drops</h4><div class="card"><table><tbody>${drops.map(d => `<tr><td>${esc(d[0])}</td><td class="small">${pctTxt(d[1])}${d[2] ? " · Pet Luck applies" : ""}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    <h4>Kills per tier</h4><div class="tiles floors">${th.map((k, i) => `<div class="tile floor${f.kills >= k ? " maxed" : ""}"><div class="fnum">${i + 1}</div><div class="tbig">${fmt(k)}</div><div class="small muted">${f.kills >= k ? "✓ done" : `${fmt(k - f.kills)} to go`}</div></div>`).join("")}</div>
+    <div data-mob-shards="${esc(name)}"></div>
+    <p class="small"><a href="https://hypixelskyblock.minecraft.wiki/w/${encodeURIComponent(name.replace(/ /g, "_"))}" target="_blank" rel="noopener">Open on the wiki ↗</a></p>`);
+  // shards you can get from it (loads in the background)
+  (async () => { try { const S = await loadShards(); const el = document.querySelector(`[data-mob-shards="${CSS.escape(name)}"]`); if (!el) return;
+    const an = SHARDS.an || shardAnalysis(CUR.st, S); SHARDS.an = an;
+    const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    const L = S.list.filter(s => re.test(s.name) || (s.hunt || []).some(h => re.test(h)));
+    if (L.length) el.innerHTML = `<h4>🔮 Related shards</h4><div class="mzones">${L.slice(0, 8).map(s => `<span>${shardName(s)} <span class="muted">lv ${an.byId[s.id]?.level || 0}</span></span>`).join("")}</div>`;
+  } catch {} })();
+}
+// a minion: every tier, its recipe and whether you've crafted it
+function openMinion(id){
+  const st = CUR?.st, m = MINIONS[id]; if (!st || !m) return;
+  const set = craftedMinions(st), [name, tiers] = m, have = tiers.map((_, i) => set.has(`${id}_${i + 1}`));
+  openInfo(`🤖 ${esc(name)} Minion`, infoStats([["Crafted", `${have.filter(Boolean).length}/${tiers.length}`, "unique tiers", pct(have.filter(Boolean).length, tiers.length)]])
+    + `<div class="card"><table><thead><tr><th>Tier</th><th>Recipe</th><th>Cost now</th><th></th></tr></thead><tbody>
+    ${tiers.map((r, i) => { const c = r ? minionCost(r) : null; return `<tr${have[i] ? ' class="done"' : ""}><td><b>${i + 1}</b></td><td class="small">${r ? r.split(" ").map(p => { const [iid, n] = p.split("*"); return `${n ? n + "× " : ""}${ilink(iid)}`; }).join(", ") : '<span class="muted">not craftable</span>'}${i ? ` <span class="muted">+ tier ${i}</span>` : ""}</td>
+      <td class="small">${c && c.coins ? fmt(c.coins) : "—"}</td><td>${have[i] ? '<span class="good">✓</span>' : ""}</td></tr>`; }).join("")}
+    </tbody></table></div><p class="muted small">Costs use instant-buy prices once the market has loaded (open the Minions tab first).</p>`);
+}
+// a trophy fish
+function openTrophy(k){
+  const st = CUR?.st, f = TROPHY_FISH.find(x => x[0] === k); if (!st || !f) return;
+  const t = st.raw?.trophy_fish || {}, total = +t[k] || 0;
+  openInfo(`🏆 ${esc(f[1])} <span class="muted small">${esc(f[2])} trophy fish</span>`,
+    infoStats([["Caught", fmt(total), "all tiers", null], ...TROPHY_TIERS.map(x => [`${{bronze:"🥉", silver:"🥈", gold:"🥇", diamond:"💎"}[x]} ${prettyKey(x)}`, fmt(+t[`${k}_${x}`] || 0), (+t[`${k}_${x}`] || 0) ? "caught" : "not yet", null])])
+    + `<p>📍 <b>How to catch it:</b> ${esc(f[3])}</p>
+    <p class="small muted">Gold is guaranteed by the 100th catch of this fish and Diamond by the 600th (pity). ${total < 100 ? `${100 - total} more catches to guaranteed Gold.` : total < 600 ? `${600 - total} more to guaranteed Diamond.` : ""}</p>
+    <p class="small"><a href="#" data-mapgo="crimson">Open the Crimson Isle on the map →</a></p>`);
+}
+// an NPC from the map
+async function openNpc(key){
+  const [isl, name] = key.split("|"), n = (MAP_EXTRA[isl]?.npcs || []).find(x => x[0] === name); if (!n) return;
+  const I = ISLANDS.find(i => i.id === isl);
+  openInfo(`🧑 ${esc(name)} <span class="muted small">${esc(I?.name || "")}</span>`, `<p>📍 X Y Z: <b class="mono">${n[2] ?? "?"} ${n[3] ?? "?"} ${n[4] ?? "?"}</b> on <a href="#" data-mapgo="${isl}">${esc(I?.name || isl)}</a></p>
+    ${(MAP_EXTRA[isl]?.quests || []).filter(q => q[2] && q[2].includes(name)).map(q => `<div class="mitem"><b>📜 ${esc(q[0])}</b><div class="small">${esc(q[1])}</div><div class="small muted">🎁 ${esc(q[3])}</div></div>`).join("")}
+    <div id="npcShop">${n[1] ? '<p class="muted">Loading shop…</p>' : '<p class="muted small">No shop.</p>'}</div>
+    <p class="small"><a href="https://hypixelskyblock.minecraft.wiki/w/${encodeURIComponent(name.replace(/ /g, "_"))}" target="_blank" rel="noopener">Open on the wiki ↗</a></p>`);
+  if (!n[1]) return;
+  try {
+    const idx = await loadNpcIndex(); status("");
+    const sells = Object.entries(idx).flatMap(([id, L]) => L.filter(o => o.npc === name).map(o => ({id, ...o})));
+    const el = $("#npcShop"); if (!el) return;
+    el.innerHTML = sells.length ? `<h4>🛒 Shop (${sells.length})</h4><div class="card"><table data-limit="12"><tbody>${sells.map(o => `<tr><td>${ilink(o.id)}${o.out > 1 ? ` <span class="muted">×${o.out}</span>` : ""}</td>
+      <td class="small">${o.coins ? fmt(o.coins) + " coins" : ""}${o.inputs.length ? (o.coins ? " + " : "") + o.inputs.map(([c, q]) => `${fmt(q)}× ${ilink(c)}`).join(", ") : ""}</td></tr>`).join("")}</tbody></table></div>` : '<p class="muted small">Shop items not found.</p>';
+    limitRows(el);
+  } catch { const el = $("#npcShop"); if (el) el.innerHTML = '<p class="muted small">Couldn’t load the shop.</p>'; }
+}
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-coll],[data-pet],[data-mob],[data-minion],[data-tfish],[data-npc],[data-go],[data-mapgo]"); if (!t) return;
+  if (e.target.closest("a[href^='http'], input, select, button:not([data-go])") && !t.matches("[data-go]")) return;
+  e.preventDefault();
+  if (t.dataset.coll) openCollection(t.dataset.coll);
+  else if (t.dataset.pet) openPet(t.dataset.pet);
+  else if (t.dataset.mob) openMob(t.dataset.mob);
+  else if (t.dataset.minion) openMinion(t.dataset.minion);
+  else if (t.dataset.tfish) openTrophy(t.dataset.tfish);
+  else if (t.dataset.npc) openNpc(t.dataset.npc);
+  else if (t.dataset.mapgo){ $("#modal").classList.remove("on"); MAP.isl = t.dataset.mapgo; store.set("mapIsl", MAP.isl); tab = "map"; store.set("tab", tab); render(); }
+  else if (t.dataset.go){ tab = t.dataset.go; store.set("tab", tab); render(); scrollTo(0, 0); }
+});
+
+// ---------- keyboard access: everything clickable can be reached with Tab and opened with Enter or Space ----------
+const CLICKABLE = ".clk,[data-coll],[data-pet],[data-mob],[data-minion],[data-tfish],[data-npc],[data-go],[data-mapgo],[data-guide],[data-plan],[data-unplan]";
+const NATIVE = "a[href],button,input,select,textarea,summary";
+function kbPrep(root){
+  if (!root || root.nodeType !== 1) return;
+  const list = root.matches(CLICKABLE) ? [root, ...root.querySelectorAll(CLICKABLE)] : root.querySelectorAll(CLICKABLE);
+  for (const el of list){ if (el.matches(NATIVE)) continue; if (!el.hasAttribute("tabindex")) el.tabIndex = 0; if (!el.hasAttribute("role")) el.setAttribute("role", "button"); }
+}
+new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) kbPrep(n); }).observe(document.body, {childList:true, subtree:true});
+kbPrep(document.body);
+document.addEventListener("keydown", e => {
+  if ((e.key !== "Enter" && e.key !== " ") || !e.target.matches?.(CLICKABLE) || e.target.matches(NATIVE)) return;
+  e.preventDefault(); e.target.click();
+});
+// popups: move focus into them and back to where you were when they close
+{ let back = null;
+  new MutationObserver(() => { const m = $("#modal"), on = m.classList.contains("on");
+    if (on && !m.contains(document.activeElement)){ if (!back) back = document.activeElement; m.querySelector("[data-close]")?.focus({preventScroll:true}); }
+    else if (!on && back){ if (document.contains(back)) back.focus({preventScroll:true}); back = null; }
+  }).observe($("#modal"), {attributes:true, attributeFilter:["class"], childList:true}); }
 // ---------- Skills tab: overview + one sub-tab per skill ----------
 const SKILL_ICON = {FARMING:"🌾", MINING:"⛏", COMBAT:"⚔", FORAGING:"🪓", FISHING:"🎣", ENCHANTING:"📖", ALCHEMY:"⚗", CARPENTRY:"🪚", RUNECRAFTING:"🔯", SOCIAL:"💬", TAMING:"🐾", HUNTING:"🏹"};
 // shard goal (Shards tab) and collection category that go with each skill
@@ -4937,7 +5360,7 @@ function viewColl(st, A){
   </div>
   <div class="section"><h2>All collections</h2><div class="toolbar"><input data-filter="ctab" placeholder="Filter…"><span class="muted small">Sorted by closest to next tier. Coop members' amounts are combined.</span></div>
   <div class="tiles" id="ctab" data-limit="24">${rows.map(c => { const f = c.next ? (c.amount-c.prev)/(c.next-c.prev) : 1, mx = c.tier >= c.maxTiers;
-    return `<div class="tile coll${mx ? " maxed" : ""}"><div class="trow"><span class="tic">${COLL_ICON[c.cat] || "📦"}</span><div style="min-width:0;flex:1"><div class="tname">${esc(c.name)}</div><div class="small muted">${esc(c.cat)}</div></div><div class="tier">${c.tier}<span class="muted">/${c.maxTiers}</span></div></div>
+    return `<div class="tile coll${mx ? " maxed" : ""}" data-coll="${esc(c.id)}" title="Click for every tier and its rewards"><div class="trow"><span class="tic">${COLL_ICON[c.cat] || "📦"}</span><div style="min-width:0;flex:1"><div class="tname">${esc(c.name)}</div><div class="small muted">${esc(c.cat)}</div></div><div class="tier">${c.tier}<span class="muted">/${c.maxTiers}</span></div></div>
       <div class="pips">${Array.from({length:c.maxTiers}, (_, k) => `<i class="${k < c.tier ? "on" : ""}"></i>`).join("")}</div>
       ${mx ? '<div class="small good">✓ Maxed</div>' : bar(f*100) + `<div class="small muted">${fmt(c.amount)} / ${fmt(c.next)} · ${fmt(c.next - c.amount)} to go</div>`}</div>`; }).join("")}</div></div>`;
 }
@@ -4957,21 +5380,53 @@ function viewCombat(st){
   ${needMarket() ? essenceMoneyHTML(st) : ""}`;
 }
 
+// extra numbers saved with each history entry (newer tabs)
+function extraSnap(st, A){
+  const me = st.raw || {}, o = {};
+  const safe = (k, fn) => { try { const v = fn(); if (v != null && !Number.isNaN(v)) o[k] = v; } catch {} };
+  safe("bestiary", () => Object.keys(st.bestiary || {}).length ? allFamilies(st).reduce((a, f) => a + f.tier, 0) : null);
+  safe("minions", () => craftedMinions(st).size || null);
+  safe("garden", () => st.garden ? GARDEN_XP.filter(t => (st.garden.garden_experience || 0) >= t).length : null);
+  safe("hotf", () => { const x = hotfFromProfile(st.hotfSrc).xp; return x == null ? null : HOTF_TIERS.filter(t => x >= t[0]).length; });
+  safe("trophy", () => me.trophy_fish ? TROPHY_FISH.reduce((a, [k]) => a + ["bronze", "silver", "gold", "diamond"].filter(x => (+me.trophy_fish[`${k}_${x}`] || 0) > 0).length, 0) : null);
+  safe("fairy", () => dig(me, "fairy_soul.total_collected") ?? null);
+  safe("coins", () => st.purse != null || st.bank != null ? Math.round((st.purse || 0) + (st.bank || 0)) : null);
+  return o;
+}
+// [key, label, decimals]
+const HIST_COLS = [["sbLevel","SB level",2],["skillAvg","Skill avg",2],["museum","Museum",0],["mp","MP",0],["accFam","Acc. families",0],["collTiers","Coll. tiers",0],["cata","Catacombs",2],["slayerXp","Slayer XP",0],["slayerLv","Slayer lvls",0],
+  ["petScore","Pet score",0],["hotm","HotM",2],["hotf","HotF tier",0],["riftSouls","Enigma souls",0],["bestiary","Bestiary tiers",0],["minions","Minion crafts",0],["garden","Garden lvl",0],["trophy","Trophy tiers",0],["fairy","Fairy souls",0],["coins","Purse + bank",0]];
+// one small line chart per number (one series each, so no legend; hover a point for its value)
+function sparkTile(h, [k, label, d]){
+  const pts = h.filter(r => r[k] != null).map(r => [r.t, +r[k]]); if (pts.length < 2) return "";
+  const W = 220, H = 64, P = 6, t0 = pts[0][0], t1 = pts[pts.length - 1][0], lo = Math.min(...pts.map(p => p[1])), hi = Math.max(...pts.map(p => p[1]));
+  const X = t => P + (t1 > t0 ? (t - t0) / (t1 - t0) : 0.5) * (W - 2 * P), Y = v => H - P - (hi > lo ? (v - lo) / (hi - lo) : 0.5) * (H - 2 * P);
+  const big = k === "slayerXp" || k === "coins", show = v => big ? fmt(v) : v.toFixed(d);
+  const first = pts[0][1], last = pts[pts.length - 1][1], dv = last - first;
+  return `<div class="tile spark"><div class="tname">${label}</div><div class="tbig">${show(last)}${dv ? `<span class="delta ${dv > 0 ? "up" : "down"}">${dv > 0 ? "+" : ""}${show(dv)}</span>` : ""}</div>
+    <svg viewBox="0 0 ${W} ${H}" class="sparksvg" role="img" aria-label="${esc(label)} from ${show(first)} to ${show(last)}"><line x1="${P}" x2="${W - P}" y1="${H - P}" y2="${H - P}" class="sbase"/>
+      <polyline points="${pts.map(([t, v]) => `${X(t).toFixed(1)},${Y(v).toFixed(1)}`).join(" ")}" class="sline"/>
+      ${pts.map(([t, v]) => `<circle cx="${X(t).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="9" class="shit"><title>${new Date(t).toLocaleString()}: ${show(v)}</title></circle><circle cx="${X(t).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3" class="sdot"/>`).join("")}</svg>
+    <div class="small muted">since ${new Date(t0).toLocaleDateString()}</div></div>`;
+}
 function viewHistory(){
   const h = CUR.hist || [];
   if (h.length < 2) return `<div class="empty">History builds up each time you load your profile (one entry per hour at most).<br>Come back after playing a while to see how you've progressed.</div>${h.length ? histTable(h) : ""}`;
-  return histTable(h);
+  const moved = ([k]) => { const v = h.filter(r => r[k] != null); return v.length > 1 && v[0][k] !== v[v.length - 1][k]; };
+  const tiles = [...HIST_COLS.filter(moved), ...HIST_COLS.filter(c => !moved(c))].map(c => sparkTile(h, c)).filter(Boolean);
+  return subTabs("history", [{id:"charts", label:"📈 Charts", count:tiles.length, html:`<div class="tiles">${tiles.join("")}</div><p class="muted small">Numbers that changed come first. Each chart has its own scale, from its lowest to highest value. Hover a point for the date and value. Numbers added in this version start appearing from your next load.</p>`},
+    {id:"table", label:"📋 Table", count:h.length, html:histTable(h)}]);
 }
 function histTable(h){
-  const cols = [["sbLevel","SB level",2],["skillAvg","Skill avg",2],["museum","Museum",0],["mp","MP",0],["accFam","Acc. families",0],["collTiers","Coll. tiers",0],["cata","Catacombs",2],["slayerXp","Slayer XP",0],["slayerLv","Slayer lvls",0],["petScore","Pet score",0],["hotm","HotM",2],["riftSouls","Enigma souls",0]];
+  const cols = HIST_COLS.map(([k, n, d]) => [k, n, d]);
   const rows = h.slice().reverse();
   return `<div class="card"><table><thead><tr><th>Date</th>${cols.map(c => `<th>${c[1]}</th>`).join("")}</tr></thead><tbody>
-  ${rows.map((r,i) => { const prev = rows[i+1]; return `<tr><td>${new Date(r.t).toLocaleString()}</td>${cols.map(([k,,d]) => { if (r[k] == null) return '<td class="muted">—</td>'; const dv = prev && prev[k] != null ? r[k]-prev[k] : 0; return `<td>${k==="slayerXp"?fmt(r[k]):(+r[k]).toFixed(d)}${dv ? `<span class="delta ${dv>0?"up":"down"}">${dv>0?"+":""}${k==="slayerXp"?fmt(dv):dv.toFixed(d)}</span>` : ""}</td>`; }).join("")}</tr>`; }).join("")}
+  ${rows.map((r,i) => { const prev = rows[i+1]; return `<tr><td>${new Date(r.t).toLocaleString()}</td>${cols.map(([k,,d]) => { if (r[k] == null) return '<td class="muted">—</td>'; const dv = prev && prev[k] != null ? r[k]-prev[k] : 0; const big = k === "slayerXp" || k === "coins"; return `<td>${big?fmt(r[k]):(+r[k]).toFixed(d)}${dv ? `<span class="delta ${dv>0?"up":"down"}">${dv>0?"+":""}${big?fmt(dv):dv.toFixed(d)}</span>` : ""}</td>`; }).join("")}</tr>`; }).join("")}
   </tbody></table></div>`;
 }
 
 // ---------- loading flow ----------
-let PROFILES = null, UUID = null, MUSEUMS = {};
+let PROFILES = null, UUID = null, MUSEUMS = {}, STALE = null;
 $("#username").value = store.get("username", "");
 $("#apikey").value = store.get("apikey", "");
 
@@ -4983,10 +5438,11 @@ async function loadPlayer(){
   try {
     const R = await loadResources();
     status("Looking up player…");
-    const p = await getJSON("https://playerdb.co/api/player/minecraft/" + encodeURIComponent(name));
-    UUID = p.data.player.raw_id;
+    UUID = await uuidOf(name);
     status("Fetching SkyBlock profiles…");
-    const pr = await getJSON(`${API}/skyblock/profiles?uuid=${UUID}`, key);
+    let pr; STALE = null;
+    try { pr = await getJSON(`${API}/skyblock/profiles?uuid=${UUID}`, key); idb.set("profiles:" + UUID, {t:Date.now(), pr}); }
+    catch(e){ const c = e.soft ? await idb.get("profiles:" + UUID) : null; if (!c) throw e; pr = c.pr; STALE = {t:c.t, why:e.message}; }
     PROFILES = (pr.profiles || []).filter(x => x.members?.[UUID]);
     if (!PROFILES.length) throw new Error("This player has no SkyBlock profiles.");
     const sel = $("#profile"); const remembered = store.get("profile:" + UUID);
@@ -4994,6 +5450,7 @@ async function loadPlayer(){
     sel.value = PROFILES.find(x => x.profile_id === remembered) ? remembered : (PROFILES.find(x => x.selected) || PROFILES[0]).profile_id;
     MUSEUMS = {}; GARDENS = {};
     await showProfile();
+    if (STALE) notice(`⚠ ${esc(STALE.why)}<br>Showing your data saved on <b>${new Date(STALE.t).toLocaleString()}</b> instead. Press Load to try again.`);
   } catch(e){
     console.error(e);
     let m = esc(e.message);
@@ -5008,15 +5465,15 @@ async function showProfile(){
   const key = $("#apikey").value.trim();
   try {
     status("Fetching museum…");
-    if (!(id in MUSEUMS)) { try { MUSEUMS[id] = await getJSON(`${API}/skyblock/museum?profile=${id}`, key); } catch(e){ console.warn(e); MUSEUMS[id] = null; } }
-    if (!(id in GARDENS)) { try { GARDENS[id] = (await getJSON(`${API}/skyblock/garden?profile=${id}`, key)).garden || null; } catch(e){ console.warn(e); GARDENS[id] = null; } }
+    if (!(id in MUSEUMS)) MUSEUMS[id] = await fetchOrCache("museum:" + id, () => getJSON(`${API}/skyblock/museum?profile=${id}`, key));
+    if (!(id in GARDENS)) GARDENS[id] = (await fetchOrCache("garden:" + id, () => getJSON(`${API}/skyblock/garden?profile=${id}`, key)))?.garden || null;
     status("Reading inventories…");
     const st = await buildState(RES, prof, MUSEUMS[id], UUID);
     st.garden = GARDENS[id];
     const A = analyze(RES, st);
-    const hist = saveHistory(UUID + ":" + id, snapshot(st, A));
+    const hist = STALE ? store.get("hist:" + UUID + ":" + id, []) : saveHistory(UUID + ":" + id, snapshot(st, A));
     CUR = {st, A, hist};
-    status(`Updated ${new Date().toLocaleTimeString()}`);
+    status(STALE ? `Saved data from ${new Date(STALE.t).toLocaleString()}` : `Updated ${new Date().toLocaleTimeString()}`);
     render();
   } catch(e){ console.error(e); notice("Couldn't process profile: " + esc(e.message), true); status(""); }
 }
@@ -5037,6 +5494,8 @@ $("#load").addEventListener("click", loadPlayer);
 $("#demo").addEventListener("click", loadDemo);
 $("#profile").addEventListener("change", showProfile);
 [$("#username"), $("#apikey")].forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") loadPlayer(); }));
+// open straight onto your profile when the username and key are already saved
+if ($("#username").value.trim() && $("#apikey").value.trim()) loadPlayer();
 
 </script>
 </body>
