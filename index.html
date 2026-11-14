@@ -113,6 +113,34 @@ ul.chain{margin:8px 0 0;padding-left:18px}ul.chain ul{padding-left:18px;margin:2
 .pill.p-high{color:var(--accent);border-color:var(--accent)}
 details summary{cursor:pointer;padding:4px 0}
 @media (max-width:640px){header,main{padding-left:12px;padding-right:12px}}
+
+/* island map */
+.mapbar{flex-wrap:wrap;gap:6px}
+.chip{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:999px;padding:4px 10px;font-size:12px;cursor:pointer}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#1a1300;font-weight:600}
+.mapwrap{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.mapcol{flex:1 1 560px;min-width:0}
+.mappanel{flex:1 1 330px;min-width:0;max-width:100%}
+.mapsvg{width:100%;height:auto;display:block;border-radius:14px;border:1px solid var(--line)}
+.mapsvg .mlink{stroke:#9fb8d0;stroke-opacity:.35;stroke-width:2}
+.mapsvg .mlink.dash{stroke-dasharray:6 6}
+.mapsvg .isl{cursor:pointer;outline:none;transition:opacity .15s}
+.mapsvg .isl .shore{fill:#e8d9a8;opacity:.18}
+.mapsvg .isl path{stroke:rgba(0,0,0,.35);stroke-width:1.5;transition:filter .15s}
+.mapsvg .isl:hover path,.mapsvg .isl:focus path{filter:brightness(1.18)}
+.mapsvg .isl.sel path{stroke:#fff;stroke-width:3}
+.mapsvg .isl.hit .shore{fill:var(--accent);opacity:.45}
+.mapsvg .isl.dim{opacity:.22}
+.mapsvg .ringbg{fill:none;stroke:rgba(255,255,255,.12);stroke-width:4}
+.mapsvg .ring{fill:none;stroke:var(--good);stroke-width:4;stroke-linecap:round}
+.mapsvg .lbl{fill:#fff;font-size:15px;font-weight:600;text-anchor:middle;paint-order:stroke;stroke:#0c1824;stroke-width:4px;stroke-linejoin:round;pointer-events:none}
+.mapsvg .lock{font-size:18px;text-anchor:middle;pointer-events:none}
+.maplegend{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px}
+.maplegend span{display:inline-flex;align-items:center;gap:5px}
+.mdot{display:inline-block;width:11px;height:11px;border-radius:50%;flex:none}
+.mappanel h4{margin:14px 0 6px}
+.mtodo{padding-left:4px;list-style:none;margin:4px 0}
+.mtodo li{margin:3px 0}
 </style>
 </head>
 <body>
@@ -3274,7 +3302,7 @@ function saveHistory(key, snap){
 
 // ---------- rendering ----------
 let CUR = null; // {st, A, hist}
-const TAB_GROUPS = [["", [["focus","🎯 Focus"],["calendar","📅 Calendar"]]], ["Progress", [["skills","Skills"],["coll","Collections"],["bestiary","Bestiary"],["pets","Pets"],["museum","Museum"],["acc","Accessories"],["minions","Minions"],["upgrades","Upgrades"]]],
+const TAB_GROUPS = [["", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"]]], ["Progress", [["skills","Skills"],["coll","Collections"],["bestiary","Bestiary"],["pets","Pets"],["museum","Museum"],["acc","Accessories"],["minions","Minions"],["upgrades","Upgrades"]]],
   ["Combat", [["slayers","Slayers"],["combat","Dungeons & Kuudra"]]], ["Islands", [["garden","Farming & Garden"],["fishing","Fishing"],["mining","Mining & HotM"],["foraging","Foraging & HotF"],["rift","Rift"]]], ["", [["shards","🔮 Shards"]]],
   ["Shopping", [["plan","Plan"],["auto","Auto bulk plan"]]], ["", [["history","History"]]]];
 const TABS = TAB_GROUPS.flatMap(g => g[1]);
@@ -3321,7 +3349,7 @@ function render(){
   const v = $("#view");
   const off = st.apiOff.length ? `<div class="msg err">No data for: <b>${st.apiOff.map(esc).join(", ")}</b>. Turn on these API settings in-game (SkyBlock Menu → Settings → API Settings), wait a few minutes, then reload.</div>` : "";
   const demo = st.demo ? `<div class="msg">Showing <b>made-up demo data</b>. Enter your username and API key to see your real progress.</div>` : "";
-  v.innerHTML = demo + off + ({focus:viewFocus, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, history:viewHistory}[tab])(st, A);
+  v.innerHTML = demo + off + ({focus:viewFocus, map:viewMap, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, history:viewHistory}[tab])(st, A);
   limitRows(v);
   setTimeout(fillShardCtx, 0);
   v.querySelectorAll("[data-filter]").forEach(inp => inp.addEventListener("input", () => filterTable(inp)));
@@ -4028,6 +4056,220 @@ setInterval(() => {
   document.querySelectorAll("[data-sbclock]").forEach(el => el.textContent = sbDateTxt(sbNow(now)));
   if (passed && tab === "calendar" && !document.querySelector("#view input:focus")) render();
 }, 1000);
+
+// ---------- Island map ----------
+// A drawn (not to scale) map of SkyBlock's islands. Zones, access rules and activities from the wiki's Locations pages.
+// tags: combat mining farming foraging fishing hunting slayer boss money quest
+// map state, kept in memory and remembered in this browser
+const MAP = {f:store.get("mapF", "all"), q:store.get("mapQ", ""), isl:store.get("mapIsl", "hub")};
+const MAP_TAGS = [["all","Everything"], ["combat","⚔ Combat XP"], ["mining","⛏ Mining XP"], ["farming","🌾 Farming XP"], ["foraging","🪓 Foraging XP"], ["fishing","🎣 Fishing XP"], ["hunting","🏹 Hunting & shards"], ["slayer","🗡 Slayers"], ["boss","👹 Bosses"], ["money","💰 Money"], ["quest","📜 Quests & collectibles"]];
+const MAP_TAG_ICON = Object.fromEntries(MAP_TAGS.map(([k, l]) => [k, l.split(" ")[0]]));
+const MAP_KIND = {home:["#d9b77a","Home"], hub:["#f5b83d","Hub"], farm:["#a3c95a","Farming"], mine:["#8090c0","Mining"], combat:["#e0605a","Combat"], forage:["#4cc38a","Foraging"], hunt:["#e08a3c","Hunting"], fish:["#3fb8c8","Fishing"], dungeon:["#b0506a","Dungeons & Kuudra"], rift:["#b07cf0","Rift"], winter:["#a8d8f0","Seasonal"]};
+const slayerLv = (st, id) => st.slayers?.find(s => s.id === id)?.level || 0;
+const skillLv = (st, id) => st.skills?.find(s => s.id === id)?.level || 0;
+const areaTiers = (st, areas) => { const F = allFamilies(st).filter(f => areas.includes(f.area)); return [F.reduce((a, f) => a + f.tier, 0), F.reduce((a, f) => a + f.max, 0)]; };
+const ISLANDS = [
+  {id:"private", name:"Private Island", x:265, y:335, r:34, kind:"home", req:[], desc:"Your own island: build anything, place minions and craft.",
+    zones:"", todo:[["money","Minions gather items and coins while you're offline"], ["quest","Craft new minion tiers to unlock more minion slots"]],
+    prog:st => { const n = craftedMinions(st).size, t = Object.values(MINIONS).reduce((a, m) => a + m[1].length, 0); return [["Unique minion crafts", n, t, "minions"]]; }},
+  {id:"garden", name:"The Garden", x:140, y:430, r:34, kind:"farm", req:[["sb", 5]], desc:"Your own farming island: crops, visitors, pests and contests.",
+    zones:"The Barn, 24 plots, The Desk, SkyMart, Composter, Greenhouse", best:["Garden"], shard:/Garden/,
+    todo:[["farming","Farm crops on your plots; crop milestones give Farming and Garden XP"], ["farming","Kill the pests that appear while you farm"], ["hunting","Pests drop many of the Garden shards"], ["money","Accept visitor offers for copper, coins and rare items"], ["farming","Jacob's Farming Contests every hour for medals"], ["quest","Unlock plots, crop upgrades and Composter upgrades"]],
+    prog:st => { const g = st.garden; if (!g) return []; const xp = g.garden_experience || 0; return [["Garden level", GARDEN_XP.filter(t => xp >= t).length, 15, "garden"]]; }},
+  {id:"hub", name:"Hub", x:500, y:320, r:60, kind:"hub", req:[], desc:"The main island: trading, the Museum, elections and a bit of every skill.",
+    zones:"Village, Bazaar Alley, Auction House, Bank, Community Center, Election Room, Museum, Hexatorum, Pet Care, Rabbit House, Farm, Forest, Coal Mine, Graveyard, Crypts, Wilderness, Ruins, Mountain, Wizard Tower, Fisherman's Hut, Colosseum, Carnival, Dark Auction", best:["Hub"], shard:/Graveyard|\bHub\b|Revenant|Mythological/,
+    todo:[["money","Bazaar, Auction House and Bank in the Village"], ["money","Dark Auction every hour at :55"], ["slayer","Revenant Horror (Zombie Slayer) around the Graveyard; Maddox starts slayer quests"], ["combat","Graveyard zombies and Crypt Ghouls for early Combat XP"], ["boss","Mythological Ritual (Griffin burrows) when Diana is in office"], ["quest","Donate to the Museum and vote in the Election Room"], ["fishing","Fisherman's Hut: fish, and take the ship to the Bayou and Lotus Atoll"], ["quest","The Wizard Tower leads to the Rift"]],
+    prog:(st, A) => [["Museum donated", A?.museum?.have || 0, A?.museum?.total || 1, "museum"], ["Zombie Slayer", slayerLv(st, "zombie"), 9, "slayers"]]},
+  {id:"park", name:"The Park", x:420, y:160, r:36, kind:"forage", req:[["FORAGING", 1]], reqNote:"and Lumber Jack's quest", desc:"Five woods with a different log in each, plus the wolf caves.",
+    zones:"Birch Park, Spruce Woods, Dark Thicket, Savanna Woodland, Jungle Island, Howling Cave, Soul Cave, Spirit Cave, Viking Longhouse, Melody's Plateau, Trials of Fire", best:["The Park"], shard:/Howling Cave|The Park/,
+    todo:[["foraging","Birch, Spruce, Dark Oak, Acacia and Jungle logs (Foraging 1–5 to enter each wood)"], ["slayer","Sven Packmaster (Wolf Slayer): wolves in the Howling, Soul and Spirit Caves"], ["quest","Melody's Harp songs on Melody's Plateau give Intelligence"], ["quest","Trials of Fire: earn and upgrade the Campfire Badge"], ["hunting","Shards in the Howling Cave"]],
+    prog:st => [["Wolf Slayer", slayerLv(st, "wolf"), 9, "slayers"]]},
+  {id:"moonglade", name:"Moonglade Marsh", x:275, y:70, r:40, kind:"forage", req:[["FORAGING", 12]], desc:"Galatea's first island: Fig and Mangrove trees, shard hunting and the Fusion House.",
+    zones:"Tangleburg, Fusion House, Evergreen Plateau, the Reaches and Wetlands, Murkwater Loch / Shallows / Depths, Tomb Floodway, Wyrmgrove Tomb, Drowned Reliquary, Forest Temple, Dragon's Lair, Red House, Tranquility Sanctum", best:["Moonglade Marsh"],
+    shard:/Galatea|Moonglade|Murkwater|Tomb Floodway|Wyrmgrove|Stride-Ember|Drowned Reliquary|Fig and Mangrove|^Fig Trees|Mangrove Trees|Kelpwoven|Tranquility Sanctum|Squid Cave/,
+    todo:[["foraging","Fig and Mangrove logs; they give Forest Whispers for Heart of the Forest"], ["hunting","Hunt with Lassos, Huntraps and nets: more shards live here than anywhere else"], ["hunting","Fuse shards at the Fusion House in Tangleburg"], ["foraging","Agatha's Contests for Agatha's shop"], ["fishing","Fish in Murkwater Loch; bring The Fish variants to Coral at the Red House"], ["quest","Moonglade Marsh Chapters and the Forest Essence shop"]],
+    prog:st => [["Foraging", skillLv(st, "FORAGING"), st.skills?.find(s => s.id === "FORAGING")?.maxLevel || 57, "foraging"]]},
+  {id:"torrhus", name:"Torrhus Canyon", x:115, y:115, r:36, kind:"forage", req:[["FORAGING", 12]], reqNote:"and Heart of the Forest 4", desc:"Galatea's second island: Helix trees, Miria's contests and the springs.",
+    zones:"Torrhus Heights, Miria's Hut, Pangolin Hideaway, Spring Path, Torrhus Springs (Shallows and Depths), Ant's Cave, Hotspot Haven, Desert Temple, Critter Safari entrance", best:["Torrhus Canyon"], shard:/Torrhus|Spring (Path|Shallows|Depths)|Ant's Cave|Hotspot Haven|Helix/,
+    todo:[["foraging","Helix trees on Torrhus Heights give Desert Whispers for HotF perks 4–8"], ["foraging","Miria's Contests give Safari Tickets"], ["hunting","Hunt in the springs; Hotspot Haven has the Giant Water Bug shard"], ["fishing","Fish in Torrhus Springs and Hotspot Haven"], ["quest","Torrhus Chapters: 7 tiers of island tasks"]],
+    prog:st => { const [t, m] = areaTiers(st, ["Torrhus Canyon"]); return [["Bestiary tiers", t, m, "bestiary"]]; }},
+  {id:"safari", name:"Critter Safari", x:48, y:240, r:28, kind:"hunt", req:[], reqNote:"A Safari Ticket from Miria's Contests", desc:"Timed hunting runs through four biomes full of critters.",
+    zones:"Cavern, Forest, Haunted and Icy Biomes", best:["Critter Safari – Cavern Biome", "Critter Safari – Forest Biome", "Critter Safari – Haunted Biome", "Critter Safari – Icy Biome"], shard:/Critter Safari/,
+    todo:[["hunting","Catch critters: every unique critter is 5,000 Hunting XP"], ["hunting","Biome milestones: Canyon (Hunting Wisdom), Haunted (Hunting Fortune), Icy (Cold Resistance), Forest (Foraging Fortune)"]],
+    prog:st => { const [t, m] = areaTiers(st, ["Critter Safari – Cavern Biome", "Critter Safari – Forest Biome", "Critter Safari – Haunted Biome", "Critter Safari – Icy Biome"]); return [["Critter tiers", t, m, "bestiary"], ["Hunting", skillLv(st, "HUNTING"), 50, "skills"]]; }},
+  {id:"spider", name:"Spider's Den", x:665, y:175, r:38, kind:"combat", req:[["COMBAT", 1]], desc:"The first combat island: spiders, Arachne and the bestiary.",
+    zones:"Spider Mound, Gravel Mines, Grandma's House, Archaeologist's Camp, Arachne's Burrow, Arachne's Sanctuary", best:["Spider's Den"], shard:/Spider's Den|Arachne/,
+    todo:[["slayer","Tarantula Broodfather (Spider Slayer) with the high-level spiders up top"], ["boss","Summon Arachne in Arachne's Sanctuary; the Broodmother spawns on the mound"], ["combat","Spiders, Silverfish and Splitter Spiders for Combat XP"], ["quest","Relics hidden around the island; Grandma Wolf unlocks the bestiary"], ["mining","The only gravel in the game, for Flint"]],
+    prog:st => [["Spider Slayer", slayerLv(st, "spider"), 9, "slayers"]]},
+  {id:"end", name:"The End", x:795, y:250, r:38, kind:"combat", req:[["COMBAT", 12]], reqNote:"Zealot Bruiser Hideout needs Combat 20, Void Sepulture 25", desc:"Endermen, Zealots and the Ender Dragon.",
+    zones:"Dragon's Nest, Void Slate, Zealot Bruiser Hideout, Void Sepulture", best:["The End"], shard:/The End|Dragon's Nest|Zealot/,
+    todo:[["combat","Zealots in the Dragon's Nest; Special Zealots drop Summoning Eyes"], ["boss","Summon the Ender Dragon with 8 Summoning Eyes; the Endstone Protector"], ["slayer","Voidgloom Seraph (Enderman Slayer) in the Void Sepulture"], ["money","Summoning Eyes and dragon fragments sell well"]],
+    prog:st => [["Enderman Slayer", slayerLv(st, "enderman"), 9, "slayers"]]},
+  {id:"crimson", name:"Crimson Isle", x:830, y:110, r:46, kind:"combat", req:[["COMBAT", 22]], desc:"The nether island: two factions, Blaze Slayer, Kuudra and Trophy Fishing.",
+    zones:"Stronghold, Crimson Fields, Blazing Volcano, Burning Desert, Dragontail (Barbarians), Scarleton (Mages), Mystic Marsh, Dojo, Magma Chamber, Matriarch's Lair, Smoldering Tomb, Ruins of Ashfang, The Wasteland", best:["Crimson Isle"], shard:/Crimson Isle|Matriarch|Mystic Marsh|Smoldering Tomb|Inferno Demonlord/,
+    todo:[["slayer","Inferno Demonlord (Blaze Slayer) with the high-level blazes near the Smoldering Tomb"], ["quest","Join the Mages or Barbarians; daily faction quests for reputation"], ["fishing","Lava and Trophy Fishing (Odger's Hut); the Blazing Volcano erupts every 2–2.5 hours"], ["boss","Minibosses: Barbarian Duke X, Mage Outlaw, Ashfang, Bladesoul, Magma Boss"], ["quest","Dojo challenges for belts"], ["money","Heavy Pearls from the Matriarch"]],
+    prog:st => { const t = st.raw?.trophy_fish || {}; const caught = TROPHY_FISH.filter(([k]) => TROPHY_TIERS.some(x => (+t[`${k}_${x}`] || 0) > 0)).length; return [["Blaze Slayer", slayerLv(st, "blaze"), 9, "slayers"], ["Trophy Fish species", caught, TROPHY_FISH.length, "fishing"]]; }},
+  {id:"kuudra", name:"Kuudra's Hollow", x:925, y:55, r:28, kind:"dungeon", req:[], reqNote:"Finish the Crimson Isle questline, then talk to Crag", desc:"A lava kraken boss with five tiers, for parties of four.",
+    zones:"", best:["Kuudra"], shard:/Kuudra/,
+    todo:[["boss","Basic, Hot, Burning, Fiery and Infernal tiers"], ["money","Chests opened with Kuudra Keys: attribute armor, essence and more"]],
+    prog:st => { const k = dig(st.raw || {}, "nether_island_player_data.kuudra_completed_tiers") || {}; return [["Tiers beaten", ["none", "hot", "burning", "fiery", "infernal"].filter(x => k[x] > 0).length, 5, "combat"]]; }},
+  {id:"dungeon", name:"Dungeon Hub", x:690, y:440, r:36, kind:"dungeon", req:[], desc:"The entrance to the Catacombs.",
+    zones:"Catacombs Entrance, floors 1–7, Master Mode", best:["Catacombs"], shard:/Catacombs/,
+    todo:[["combat","Catacombs floors and Master Mode for Catacombs and class XP"], ["boss","A boss at the end of every floor"], ["money","Dungeon chests and Essence"], ["quest","Find secrets for a better score"]],
+    prog:st => [["Catacombs", st.cata?.level || 0, 50, "combat"]]},
+  {id:"barn", name:"The Barn", x:525, y:485, r:32, kind:"farm", req:[["FARMING", 1]], desc:"Early crops and farm animals.",
+    zones:"The Barn, Windmill", best:["The Farming Islands"],
+    todo:[["farming","Wheat, Carrots, Potatoes, Melons and Pumpkins"], ["combat","Pigs, Cows, Sheep and Chickens"]],
+    prog:st => [["Farming", skillLv(st, "FARMING"), st.skills?.find(s => s.id === "FARMING")?.maxLevel || 60, "garden"]]},
+  {id:"mushroom", name:"Mushroom Desert", x:640, y:565, r:36, kind:"farm", req:[["FARMING", 5]], desc:"Desert crops, mushrooms and Trevor's animal hunts.",
+    zones:"Desert Settlement, Desert Mountain, Jake's House, The Observatory, Oasis, Shepherd's Keep, Trapper's Den, Mushroom Gorge, Glowing Mushroom Cave, Underground Lab", best:["The Farming Islands"],
+    todo:[["farming","Cactus, Sugar Cane, Cocoa Beans and Mushrooms"], ["quest","Trevor's animal-tracking quests at the Trapper's Den"], ["fishing","Fish in the Oasis"], ["quest","Treasure Hunter hints, the Shepherd's sheep, Jake's creatures"], ["money","Tony sells Tier XII Farming minions"]],
+    prog:st => { const [t, m] = areaTiers(st, ["The Farming Islands"]); return [["Bestiary tiers", t, m, "bestiary"]]; }},
+  {id:"goldmine", name:"Gold Mine", x:390, y:470, r:30, kind:"mine", req:[["MINING", 1]], desc:"The first mining island.",
+    zones:"", todo:[["mining","Coal, Iron and Gold ore"]], prog:st => [["Mining", skillLv(st, "MINING"), 60, "mining"]]},
+  {id:"deep", name:"Deep Caverns", x:330, y:565, r:34, kind:"mine", req:[["MINING", 5]], desc:"Six layers of ores going down to the Obsidian Sanctuary.",
+    zones:"Gunpowder Mines, Lapis Quarry, Pigmen's Den, Slimehill, Diamond Reserve, Obsidian Sanctuary", best:["Deep Caverns"], shard:/Deep Caverns|Lapis Quarry/,
+    todo:[["mining","Lapis, Redstone, Emerald, Diamond and Obsidian, one per layer"], ["combat","Lapis Zombies, Redstone Pigmen, Slimes, Miner Zombies and Skeletons"], ["quest","Rhys in the Obsidian Sanctuary opens the Dwarven Mines"]],
+    prog:st => { const [t, m] = areaTiers(st, ["Deep Caverns"]); return [["Bestiary tiers", t, m, "bestiary"]]; }},
+  {id:"dwarven", name:"Dwarven Mines", x:205, y:585, r:42, kind:"mine", req:[["MINING", 12]], reqNote:"and Rhys's quest", desc:"Mithril, Titanium, commissions and Heart of the Mountain.",
+    zones:"Dwarven Village, Royal Palace, The Forge, Cliffside Veins, Rampart's Quarry, Upper Mines, Royal Mines, Far Reserve, Goblin Burrows, Great Ice Wall, The Mist, Hanging Court, Grand Library", best:["Dwarven Mines"], shard:/^(?!Glacite).*(Dwarven Mines|The Mist)/,
+    todo:[["mining","Mithril and Titanium; commissions give Mining XP and HotM XP"], ["money","The Forge: gemstone gear, drill parts and more"], ["boss","Cult of the Fallen Star in the Cliffside Veins (days 7, 14, 21, 28)"], ["combat","Goblins, Glacite Walkers, Treasure Hoarders and the Ghosts in The Mist"], ["quest","The Puzzler in the Grand Library"]],
+    prog:st => [["Heart of the Mountain", st.hotm || 0, 10, "mining"]]},
+  {id:"glacite", name:"Glacite Tunnels", x:225, y:480, r:30, kind:"mine", req:[["hotm", 7]], reqNote:"and Dulin's quest", desc:"Frozen tunnels under the Dwarven Mines: Glacite, Umber, Tungsten and the Mineshafts.",
+    zones:"Dwarven Base Camp, Fossil Research Center, Glacite Tunnels, Glacite Mineshafts, Great Glacite Lake, Grandpa Wolf's Cave", shard:/Glacite/,
+    todo:[["mining","Glacite, Umber, Tungsten and gemstones for Glacite Powder"], ["money","Glacite Mineshafts: frozen corpses with keys and loot"], ["quest","Excavate fossils for Dr. Stone"], ["fishing","Fish in the Great Glacite Lake"]],
+    prog:st => [["Heart of the Mountain", st.hotm || 0, 10, "mining"]]},
+  {id:"crystal", name:"Crystal Hollows", x:80, y:545, r:42, kind:"mine", req:[["MINING", 12], ["hotm", 4]], desc:"A huge gemstone cave with five crystals to collect.",
+    zones:"Crystal Nucleus, Jungle, Goblin Holdout, Mithril Deposits, Precursor Remnants, Magma Fields, Mines of Divan, Lost Precursor City, Khazad-dûm, Jungle Temple, Goblin Queen's Den", best:["Crystal Hollows"], shard:/Crystal Hollows|Magma Fields/,
+    todo:[["mining","Gemstones (Ruby, Amber, Amethyst, Jade, Sapphire, Topaz, Jasper) and Hard Stone"], ["quest","Collect the 5 crystals and place them in the Crystal Nucleus for loot"], ["boss","Bal in Khazad-dûm, the Goblin Queen, Automatons"], ["money","Gemstones, powder and Scatha / Worms while mining"]],
+    prog:st => { const c = dig(st.raw || {}, "mining_core.crystals") || {}; return Object.keys(c).length ? [["Crystals found", ["jade", "amber", "topaz", "sapphire", "amethyst"].filter(x => c[x + "_crystal"]?.state === "FOUND").length, 5, "mining"]] : []; }},
+  {id:"bayou", name:"Backwater Bayou", x:850, y:445, r:34, kind:"fish", req:[["FISHING", 5]], reqNote:"Ship Navigator at the Fisherman's Hut", desc:"An early fishing island: rod parts, Fishing Hotspots and Junker Joel.",
+    zones:"", best:["Fishing – Backwater Bayou"], shard:/Backwater Bayou/,
+    todo:[["fishing","Bayou sea creatures and Fishing Hotspots"], ["quest","Rod Parts (hooks, lines, sinkers) and Backwater Bayou Chapters"]],
+    prog:st => [["Fishing", skillLv(st, "FISHING"), 50, "fishing"]]},
+  {id:"lotus", name:"Lotus Atoll", x:935, y:540, r:34, kind:"fish", req:[["FISHING", 10]], desc:"Trophy Frogs, the Lotus collection and the Lotus Eater.",
+    zones:"Lotus Highlands, Lotus Eater's Cave, Tewtil Tunnel", best:["Lotus Atoll"], shard:/Lotus Atoll/,
+    todo:[["fishing","Lotus sea creatures and the Lotus collection"], ["quest","Catch Trophy Frogs; the Highlands Frog lives in the Lotus Highlands"], ["boss","The Lotus Eater: throw 4 Frogcoins in the water within 30 minutes"], ["quest","Lotus Atoll Chapters"]],
+    prog:st => { const [t, m] = areaTiers(st, ["Lotus Atoll"]); return [["Bestiary tiers", t, m, "bestiary"]]; }},
+  {id:"jerry", name:"Jerry's Workshop", x:930, y:320, r:32, kind:"winter", req:[], reqNote:"Open during Late Winter, and all of December", desc:"The winter island: gifts, ice and winter sea creatures.",
+    zones:"Jerry Pond, Hot Springs, Reflective Pond, Glacial Cave, Mount Jerry, Einary's Emporium, Sherry's Showroom", best:["Jerry", "Fishing – Winter"], shard:/Jerry's Workshop/,
+    todo:[["fishing","Winter sea creatures in the ponds (Yeti, Reindrake…)"], ["boss","Season of Jerry: defend the workshop (Late Winter 24–26)"], ["money","Gifts, and Frozen Treasure in the Glacial Cave"], ["mining","Ice in the Glacial Cave"]],
+    prog:st => { const [t, m] = areaTiers(st, ["Jerry", "Fishing – Winter"]); return [["Bestiary tiers", t, m, "bestiary"]]; }},
+  {id:"rift", name:"The Rift", x:800, y:580, r:40, kind:"rift", req:[], reqNote:"Enter from the Wizard Tower in the Hub", desc:"A strange dimension with its own time limit, Motes and Enigma Souls.",
+    zones:"Wyld Woods, Black Lagoon, West Village, Dreadfarm, Village Plaza, Living Cave, Colosseum, Stillgore Château, The Mountaintop", shard:/\bRift\b/,
+    todo:[["quest","52 Enigma Souls, 8 Timecharms and Montezuma's soul pieces"], ["slayer","Riftstalker Bloodfiend (Vampire Slayer) in Stillgore Château"], ["boss","Leech Supreme, Bacte and the Sun Gecko"], ["money","Motes for the Rift shops"]],
+    prog:st => [["Enigma Souls", (dig(st.raw || {}, "rift.enigma.found_souls") || []).length, 52, "rift"], ["Vampire Slayer", slayerLv(st, "vampire"), 5, "slayers"]]},
+];
+const MAP_LINKS = [["hub","private"], ["hub","garden"], ["hub","park"], ["park","moonglade"], ["moonglade","torrhus"], ["torrhus","safari"], ["hub","spider"], ["spider","crimson"], ["crimson","kuudra"], ["spider","end"], ["hub","dungeon"], ["hub","barn"], ["barn","mushroom"], ["hub","goldmine"], ["goldmine","deep"], ["deep","dwarven"], ["dwarven","glacite"], ["dwarven","crystal"], ["hub","bayou"], ["bayou","lotus"], ["hub","jerry", 1], ["hub","rift", 1]];
+const islandText = i => [i.name, i.desc, i.zones, ...i.todo.map(t => t[1]), ...(i.best || []).flatMap(a => (BESTIARY_ALL.find(x => x[0] === a)?.[1] || []).map(f => f[0]))].join(" ").toLowerCase();
+function islandReq(st, i){
+  const lines = i.req.map(([k, n]) => {
+    if (k === "sb") return {t:`SkyBlock level ${n}`, ok:st.sbLevel != null ? st.sbLevel >= n : null, have:Math.floor(st.sbLevel || 0)};
+    if (k === "hotm") return {t:`Heart of the Mountain ${n}`, ok:st.hotm != null ? st.hotm >= n : null, have:st.hotm};
+    const lv = st.skills?.find(s => s.id === k)?.level; return {t:`${prettyKey(k)} ${n}`, ok:lv != null ? lv >= n : null, have:lv};
+  });
+  return {lines, locked:lines.some(l => l.ok === false)};
+}
+function islandProg(st, A, i){
+  let P = []; try { P = i.prog ? i.prog(st, A) : []; } catch {}
+  return P.filter(p => p[2] > 0);
+}
+// irregular island outline from a seeded wobble around a circle
+function islandPath(i){
+  let h = 0; for (const c of i.id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const rnd = () => (h = (h * 1103515245 + 12345) >>> 0) / 4294967296;
+  const n = 11, pts = Array.from({length:n}, (_, k) => { const a = k / n * Math.PI * 2, rr = i.r * (0.8 + rnd() * 0.32); return [Math.cos(a) * rr, Math.sin(a) * rr * 0.82]; });
+  const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+  let d = `M${mid(pts[n - 1], pts[0]).map(v => v.toFixed(1)).join(",")}`;
+  for (let k = 0; k < n; k++){ const m = mid(pts[k], pts[(k + 1) % n]); d += ` Q${pts[k].map(v => v.toFixed(1)).join(",")} ${m.map(v => v.toFixed(1)).join(",")}`; }
+  return d + "Z";
+}
+function mapMatches(i, f, q){
+  return (f === "all" || i.todo.some(t => t[0] === f)) && (!q || islandText(i).includes(q));
+}
+function mapSvg(st, A){
+  const f = MAP.f, q = MAP.q.toLowerCase().trim(), sel = MAP.isl;
+  const by = Object.fromEntries(ISLANDS.map(i => [i.id, i]));
+  const links = MAP_LINKS.map(([a, b, dash]) => `<line x1="${by[a].x}" y1="${by[a].y}" x2="${by[b].x}" y2="${by[b].y}" class="mlink${dash ? " dash" : ""}"/>`).join("");
+  const isl = ISLANDS.map(i => {
+    const R = islandReq(st, i), P = islandProg(st, A, i), p = P.length ? P.reduce((a, x) => a + Math.min(1, x[1] / x[2]), 0) / P.length : null;
+    const ring = i.r + 7, C = 2 * Math.PI * ring;
+    const cls = ["isl", i.id === sel && "sel", !mapMatches(i, f, q) && "dim", (f !== "all" || q) && mapMatches(i, f, q) && "hit"].filter(Boolean).join(" ");
+    return `<g class="${cls}" data-isl="${i.id}" transform="translate(${i.x},${i.y})" tabindex="0" role="button" aria-label="${esc(i.name)}">
+      <title>${esc(i.name)}${R.locked ? " (locked)" : ""}</title>
+      <ellipse rx="${i.r + 4}" ry="${(i.r + 4) * 0.82}" class="shore"/>
+      <path d="${islandPath(i)}" fill="${MAP_KIND[i.kind][0]}"/>
+      ${p != null ? `<circle r="${ring}" class="ringbg"/><circle r="${ring}" class="ring" stroke-dasharray="${(C * p).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90)"/>` : ""}
+      ${R.locked ? `<text class="lock" y="5">🔒</text>` : ""}
+      <text class="lbl" y="${i.r * 0.82 + 22}">${esc(i.name)}</text></g>`;
+  }).join("");
+  return `<svg viewBox="0 0 1000 650" class="mapsvg" role="img" aria-label="Map of the SkyBlock islands">
+    <defs><radialGradient id="sea" cx="50%" cy="45%" r="70%"><stop offset="0" stop-color="#16324a"/><stop offset="1" stop-color="#0c1824"/></radialGradient></defs>
+    <rect width="1000" height="650" rx="14" fill="url(#sea)"/>${links}${isl}</svg>`;
+}
+function mapPanelHTML(st, A, id){
+  const i = ISLANDS.find(x => x.id === id) || ISLANDS.find(x => x.id === "hub");
+  const R = islandReq(st, i), P = islandProg(st, A, i);
+  const reqHTML = R.lines.length || i.reqNote ? `<div class="small" style="margin:6px 0">${R.lines.map(l => `<span class="${l.ok === false ? "bad" : l.ok ? "good" : "muted"}">${l.ok === false ? "🔒" : l.ok ? "✓" : "•"} ${esc(l.t)}${l.ok === false && l.have != null ? ` (you have ${l.have})` : ""}</span>`).join(" · ")}${i.reqNote ? `${R.lines.length ? " · " : ""}<span class="muted">${esc(i.reqNote)}</span>` : ""}</div>` : `<div class="small good" style="margin:6px 0">✓ Open to everyone</div>`;
+  const tags = [...new Set(i.todo.map(t => t[0]))];
+  const fams = i.best ? allFamilies(st).filter(fm => i.best.includes(fm.area)) : [];
+  const ft = fams.reduce((a, x) => a + x.tier, 0), fm = fams.reduce((a, x) => a + x.max, 0);
+  return `<div class="card">
+    <div style="display:flex;align-items:center;gap:10px"><span class="mdot" style="background:${MAP_KIND[i.kind][0]}"></span><h2 style="margin:0">${esc(i.name)}</h2></div>
+    <div class="muted small">${MAP_KIND[i.kind][1]} · ${tags.map(t => MAP_TAG_ICON[t]).join(" ")}</div>
+    <p style="margin:8px 0 4px">${esc(i.desc)}</p>${reqHTML}
+    ${P.length ? `<h4>Your progress</h4><table><tbody>${P.map(([l, h, m, t]) => `<tr><td class="small">${esc(l)}</td><td class="small"><b>${fmt(h)}</b>/${fmt(m)}</td><td style="width:34%">${bar(pct(h, m))}</td><td class="small">${goTab(t, "Open")}</td></tr>`).join("")}</tbody></table>` : ""}
+    <h4>What you can do here</h4><ul class="small mtodo">${i.todo.map(([t, x]) => `<li><span title="${esc(MAP_TAGS.find(m => m[0] === t)?.[1] || "")}">${MAP_TAG_ICON[t]}</span> ${esc(x)}</li>`).join("")}</ul>
+    ${i.zones ? `<details class="small"><summary><b>Zones</b> <span class="muted">(${i.zones.split(", ").length})</span></summary><p class="muted" style="margin:6px 0">${esc(i.zones)}</p></details>` : ""}
+  </div>
+  ${fams.length ? `<h4>👾 Mobs here <span class="muted small">(${fams.length} bestiary families · ${ft}/${fm} tiers)</span></h4>${famTable(fams.slice().sort((a, b) => (a.tier >= a.max) - (b.tier >= b.max) || (a.next - a.kills) - (b.next - b.kills)), 6)}` : ""}
+  ${i.shard ? `<div data-map-shards="${i.id}"><p class="muted small">Loading shards…</p></div>` : ""}`;
+}
+function viewMap(st, A){
+  const f = MAP.f, sel = MAP.isl;
+  setTimeout(fillMapShards, 0);
+  const locked = ISLANDS.filter(i => islandReq(st, i).locked).length;
+  return `<div class="toolbar mapbar">${MAP_TAGS.map(([k, l]) => `<button class="chip${k === f ? " on" : ""}" data-mapf="${k}">${l}</button>`).join("")}
+      <input type="search" id="mapQ" placeholder="Find a mob, NPC or zone…" value="${esc(MAP.q)}" style="width:210px"></div>
+    <div class="mapwrap"><div class="mapcol">${mapSvg(st, A)}
+      <div class="small muted maplegend">${Object.values(MAP_KIND).map(([c, n]) => `<span><i class="mdot" style="background:${c}"></i>${n}</span>`).join("")}<span>◯ ring = your progress there</span>${locked ? `<span>🔒 ${locked} island${locked === 1 ? "" : "s"} you can't enter yet</span>` : ""}</div>
+      <p class="muted small">Not to scale: lines show how you travel between islands (dashed = portal or seasonal). Click an island for details.</p></div>
+      <div class="mappanel" id="mapPanel">${mapPanelHTML(st, A, sel)}</div></div>`;
+}
+async function fillMapShards(){
+  const el = document.querySelector("[data-map-shards]:not([data-filled])"); if (!el || !CUR) return;
+  const i = ISLANDS.find(x => x.id === el.dataset.mapShards); el.dataset.filled = "1";
+  try {
+    const S = await loadShards(); await loadPrices().catch(() => null);
+    const an = SHARDS.an || shardAnalysis(CUR.st, S); SHARDS.an = an;
+    if (!el.isConnected) return;
+    const rows = an.rows.map(r => ({r, w:(r.s.where || []).filter(w => w.place && w.method !== "Fusion" && i.shard.test(w.place))})).filter(x => x.w.length)
+      .sort((a, b) => (a.r.level >= 10) - (b.r.level >= 10) || RARITIES.indexOf(b.r.s.rarity) - RARITIES.indexOf(a.r.s.rarity));
+    el.innerHTML = rows.length ? `<h4>🔮 Shards here <span class="muted small">(${rows.filter(x => x.r.level < 10).length} of ${rows.length} not maxed)</span></h4>
+      <div class="card"><table data-limit="8"><tbody>${rows.map(x => `<tr${x.r.level >= 10 ? ' style="opacity:.6"' : ""}><td>${shardName(x.r.s)}</td><td class="small">${x.r.level >= 10 ? "maxed" : `lv ${x.r.level}`}</td>
+        <td class="small muted">${[...new Set(x.w.map(w => `${METHOD_ICON[w.method] || "•"} ${w.method}${/Garden|Galatea|Crimson Isle$/.test(w.place) ? "" : ` · ${w.place}`}`))].map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div>` : "";
+    limitRows(el);
+  } catch(e){ console.warn(e); el.innerHTML = ""; }
+}
+function mapSelect(id){
+  if (!CUR) return;
+  MAP.isl = id; store.set("mapIsl", id);
+  document.querySelectorAll(".mapsvg .isl").forEach(g => g.classList.toggle("sel", g.dataset.isl === id));
+  const p = $("#mapPanel"); if (!p) return;
+  p.innerHTML = mapPanelHTML(CUR.st, CUR.A, id); limitRows(p); fillMapShards();
+  if (p.getBoundingClientRect().top > innerHeight - 80) p.scrollIntoView({behavior:"smooth", block:"start"});
+}
+function mapRefilter(){
+  const f = MAP.f, q = MAP.q.toLowerCase().trim();
+  document.querySelectorAll(".mapsvg .isl").forEach(g => { const i = ISLANDS.find(x => x.id === g.dataset.isl), m = mapMatches(i, f, q); g.classList.toggle("dim", !m); g.classList.toggle("hit", m && (f !== "all" || !!q)); });
+  document.querySelectorAll("[data-mapf]").forEach(b => b.classList.toggle("on", b.dataset.mapf === f));
+}
+document.addEventListener("click", e => {
+  const g = e.target.closest("[data-isl]"); if (g) { mapSelect(g.dataset.isl); return; }
+  const b = e.target.closest("[data-mapf]"); if (b) { MAP.f = b.dataset.mapf; store.set("mapF", MAP.f); mapRefilter(); }
+});
+document.addEventListener("keydown", e => { const g = e.target.closest?.("[data-isl]"); if (g && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); mapSelect(g.dataset.isl); } });
+document.addEventListener("input", e => { if (e.target.id !== "mapQ") return; MAP.q = e.target.value; store.set("mapQ", MAP.q); mapRefilter(); });
 
 // ---------- Skills tab: overview + one sub-tab per skill ----------
 const SKILL_ICON = {FARMING:"🌾", MINING:"⛏", COMBAT:"⚔", FORAGING:"🪓", FISHING:"🎣", ENCHANTING:"📖", ALCHEMY:"⚗", CARPENTRY:"🪚", RUNECRAFTING:"🔯", SOCIAL:"💬", TAMING:"🐾", HUNTING:"🏹"};
