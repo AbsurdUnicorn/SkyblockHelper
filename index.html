@@ -3418,7 +3418,7 @@ function moneyHTML2(S, bz, u){
       <td>${p.q}× ${N(p.out)}<div class="muted small">@ ${fmt(p.sell)}${p.listed ? ` (listed ${fmt(p.listed)})` : ""}${p.steps > 1 ? ` · 🔗 ${p.steps}-step` : ""}</div>${sellRateHTML(bz, S, p.out, 0, !!p.listed)}</td>
       <td class="good"><b>${fmt(p.real)}</b><div class="muted small">model ${fmt(p.cph)}</div></td>
       <td>${(p.real / Math.max(1, p.raw)).toFixed(1)}×<div class="muted small">raw ${fmt(p.raw)}/hr</div></td>
-      <td class="small"><details><summary>How</summary>${steps(p)}<div class="muted">${fmt(p.runsHr)} runs/hr · +${fmt(p.profit)} per run</div></details></td></tr>`;
+      <td class="small"><details data-k="f|${p.out}|${p.a}|${p.b}"><summary>How</summary>${steps(p)}<div class="muted">${fmt(p.runsHr)} runs/hr · +${fmt(p.profit)} per run</div></details></td></tr>`;
   const head = `<thead><tr><th>Farm</th><th>Buy (per run)</th><th>Make → sell offer</th><th>Realistic /hr</th><th>vs. selling raw</th><th></th></tr></thead>`;
   const top = f.worth[0] || f.border[0];
   const histNote = f.histLoading ? `<div class="muted small" style="margin-bottom:8px">⏳ Checking the past week's prices, so the ranking may still change…</div>` : "";
@@ -3432,16 +3432,16 @@ function moneyHTML2(S, bz, u){
     <div class="card"><table id="worthtab">${head}<tbody>${f.worth.map(row).join("") || `<tr><td colspan="6" class="muted">None right now (needs ~${fmt(WORTH)}/hr realistic).</td></tr>`}</tbody></table></div>
 
     ${f.border.length ? `<details class="section"${u.borderline ? " open" : ""} id="borderBox"><summary><b>Borderline</b> <span class="muted">(${f.border.length}): ${fmt(BORDER)}–${fmt(WORTH)}/hr realistic. Only if the top plans' prices drop.</span></summary>
-      <div class="card"><table data-limit="8">${head}<tbody>${f.border.map(row).join("")}</tbody></table></div></details>` : ""}
+      <div class="card"><table data-limit="8" id="bordertab">${head}<tbody>${f.border.map(row).join("")}</tbody></table></div></details>` : ""}
 
     ${f.passive.length ? `<h3 class="ph" style="margin-top:18px">💤 Passive order flip <span class="muted small">(optional, needs spare coins)</span></h3>
     <p class="muted small">No farming: put buy orders on both inputs, fuse, and list a sell offer. Only high-volume flips without price-gap warnings. It works only while your orders keep filling.</p>
     <div class="card"><table><thead><tr><th>Buy orders</th><th>Make → sell offer</th><th>Per run</th><th>Per day (est.)</th><th>Coins in orders</th><th></th></tr></thead><tbody>
     ${f.passive.map(x => `<tr><td class="small">${x.fa}× ${N(x.a)} + ${x.fb}× ${N(x.b)}${x.steps > 1 ? `<div class="muted">🔗 ${x.steps}-step</div>` : ""}</td><td>${x.n}× ${N(x.out)}<div class="muted small">@ ${fmt(x.sell)}${x.listed ? ` (listed ${fmt(x.listed)})` : ""}</div>${sellRateHTML(bz, S, x.out, 0, !!x.listed)}</td>
-      <td class="good">+${fmt(x.p)}<div class="muted small">${(x.roi * 100).toFixed(0)}% return</div></td><td>${fmt(x.daily)}<div class="muted small">market ~${fmt(x.perDay)} runs/day</div></td><td>${fmt(x.cost * Math.min(50, x.perDay * 0.25))}</td><td class="small"><details><summary>How</summary>${budgetHTML(S, bz, x, "chain", budget, Math.min(50, x.perDay * 0.25), false, 1)}</details></td></tr>`).join("")}
+      <td class="good">+${fmt(x.p)}<div class="muted small">${(x.roi * 100).toFixed(0)}% return</div></td><td>${fmt(x.daily)}<div class="muted small">market ~${fmt(x.perDay)} runs/day</div></td><td>${fmt(x.cost * Math.min(50, x.perDay * 0.25))}</td><td class="small"><details data-k="p|${x.out}|${x.a}|${x.b}"><summary>How</summary>${budgetHTML(S, bz, x, "chain", budget, Math.min(50, x.perDay * 0.25), false, 1)}</details></td></tr>`).join("")}
     </tbody></table></div>` : ""}
 
-    <details class="card small" style="margin-top:16px"><summary><b>What isn't shown, and why</b></summary><ul>
+    <details class="card small" style="margin-top:16px" data-k="whynot"><summary><b>What isn't shown, and why</b></summary><ul>
       <li><b>Instant buy → instant sell fusions:</b> the best one right now makes about ${fmt(f.instFlip?.daily || 0)} a day. Margins are a few thousand coins and vanish with any price move.</li>
       <li><b>Farming, then selling instantly:</b> fused plans sold instantly make only a few million an hour. Selling rare drops raw beats them:
         ${f.rawBest.map(p => `${N(p.sellRaw)} ~${fmt(p.cph)}/hr`).join(", ")}. For those, just sell what you farm.</li>
@@ -3475,10 +3475,13 @@ function initMoney(S, an){
       const bz = await loadBazaarFull(force);
       if (!$("#moneyOut")) return;
       const u = read(); store.set("moneyUI", u);
-      $("#moneyOut").innerHTML = moneyHTML2(S, bz, u);
-      // price history for every result shown, then draw again with it
+      const el = $("#moneyOut");
+      const open = new Set([...el.querySelectorAll("details[data-k][open]")].map(d => d.dataset.k)), wide = new Set([...el.querySelectorAll("table[id].all")].map(t => t.id));
+      el.innerHTML = moneyHTML2(S, bz, u);
+      el.querySelectorAll("details[data-k]").forEach(d => { if (open.has(d.dataset.k)) d.open = true; });
+      wide.forEach(id => el.querySelector("#" + id)?.classList.add("all"));
       loadShardHist(S, moneyFindings(S, bz, u).histIds, () => { if ($("#moneyOut")) draw(false); });
-      limitRows($("#moneyOut"));
+      limitRows(el);
       $("#borderBox")?.addEventListener("toggle", () => store.set("moneyUI", read()));
     } catch(e){ console.error(e); outEl.innerHTML = `<div class="msg err">Couldn't load Bazaar prices: ${esc(e.message)}</div>`; }
   };
