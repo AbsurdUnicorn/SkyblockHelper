@@ -305,6 +305,8 @@ tr:focus-visible{outline-offset:-2px}
 .mnum{text-align:right;white-space:nowrap}
 label.inline input{width:64px;margin:0 2px}
 .pill.warn{background:#4a3a12;color:#ffd27a;border-color:#6b5418}
+.mbudget{margin-top:10px;padding:8px 12px;border-left:3px solid var(--accent);background:var(--panel2);border-radius:8px}
+.mbudget ol{margin:6px 0;padding-left:20px}.mbudget li{margin:2px 0}
 .mtool{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:0 0 12px}
 .mtool label{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
 .mtool input[data-filter]{min-width:220px}
@@ -3268,11 +3270,74 @@ function farmTreeHTML(S, bz, o, C, id, amount){
   const kids = A.id === B.id ? farmTreeHTML(S, bz, o, C.prev || C, A.id, runs * (A.fuse + B.fuse)) : farmTreeHTML(S, bz, o, C.prev || C, A.id, runs * A.fuse) + farmTreeHTML(S, bz, o, C.prev || C, B.id, runs * B.fuse);
   return `<li>⚗ Fuse <b>${runs}×</b> ${A.fuse}× ${shardName(A)} + ${B.fuse}× ${shardName(B)} → <b>${fmt(runs * q)}×</b> ${shardName(s)}${spare > 1e-9 ? ` <span class="muted">(${fmt(spare)} spare)</span>` : ""}<ul>${kids}</ul></li>`;
 }
+// ---------- budget: turn a plan into an exact shopping list ----------
+// "50m", "1.5b", "250,000" -> coins
+// whole-fusion counts for a farm plan (farmPlans' stage arrays): what to buy, farm and fuse
+function farmCounts(S, C, id, amount, acc){
+  const F = S._flat, i = F.idx[id], h = C.how[i];
+  if (h === 2){ acc.farm[id] = (acc.farm[id] || 0) + Math.ceil(amount - 1e-9); return; }
+  if (h === 1){ acc.buy[id] = (acc.buy[id] || 0) + Math.ceil(amount - 1e-9); return; }
+  const A = S.list[C.ha[i]], B = S.list[C.hb[i]], q = C.hq[i], runs = Math.ceil(amount / q - 1e-9);
+  (acc.fuse[id] ||= {runs:0, a:A.id, b:B.id, fa:A.fuse, fb:B.fuse, q}).runs += runs;
+  const P = C.prev || C;
+  if (A.id === B.id) farmCounts(S, P, A.id, runs * (A.fuse + B.fuse), acc); else { farmCounts(S, P, A.id, runs * A.fuse, acc); farmCounts(S, P, B.id, runs * B.fuse, acc); }
+}
+// the same for a bought-only chain (shardCostStages' objects)
+function chainCounts(S, C, id, amount, acc){
+  const h = C.how[id];
+  if (!h){ acc.buy[id] = (acc.buy[id] || 0) + Math.ceil(amount - 1e-9); return; }
+  const A = S.by[h.a], B = S.by[h.b], runs = Math.ceil(amount / h.qty - 1e-9);
+  (acc.fuse[id] ||= {runs:0, a:h.a, b:h.b, fa:A.fuse, fb:B.fuse, q:h.qty}).runs += runs;
+  const P = C.prev || C;
+  if (h.a === h.b) chainCounts(S, P, h.a, runs * (A.fuse + B.fuse), acc); else { chainCounts(S, P, h.a, runs * A.fuse, acc); chainCounts(S, P, h.b, runs * B.fuse, acc); }
+}
+// How many final fusions a budget pays for, and the exact list. Instant buys are priced down the order book.
+// p: a plan with a, b, fa, fb, C and the result's q (or n) and sell price; maxRuns: what the market (and your farming time) can take
+function budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy){
+  const q = p.q || p.n, walk = kind === "farm" ? farmCounts : chainCounts;
+  const counts = runs => {
+    const acc = {buy:{}, farm:{}, fuse:{}};
+    if (p.a === p.b) walk(S, p.C, p.a, runs * (p.fa + p.fb), acc); else { walk(S, p.C, p.a, runs * p.fa, acc); walk(S, p.C, p.b, runs * p.fb, acc); }
+    let cost = 0, thin = false; const each = {};
+    for (const [id, n] of Object.entries(acc.buy)){
+      const m = bz.m[S.by[id].bz];
+      if (instantBuy){ const x = bookAvg(m?.askBook, n); each[id] = x.avg; thin ||= x.thin; } else each[id] = m?.bid || m?.ask || 0;
+      cost += each[id] * n;
+    }
+    return {...acc, each, cost, thin, runs};
+  };
+  const hi = Math.max(1, Math.floor(maxRuns));
+  let best = counts(hi), why = maxRuns < 1 ? "market" : kind === "farm" ? "time" : "market";
+  if (budget > 0 && best.cost > budget){
+    let lo = 0, top = hi;   // largest run count the budget covers
+    while (lo < top){ const mid = Math.ceil((lo + top) / 2); if (counts(mid).cost <= budget) lo = mid; else top = mid - 1; }
+    best = lo ? counts(lo) : {...counts(1), runs:0}; why = "budget";
+  }
+  const sellTotal = best.runs * q * p.sell * (1 - 0.0125);
+  return {...best, q, why, revenue:sellTotal, profit:sellTotal - (best.runs ? best.cost : 0), first:counts(1).cost};
+}
+function budgetHTML(S, bz, p, kind, budget, maxRuns, instantBuy, speed){
+  const N = id => shardName(S.by[id]);
+  const B = budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy);
+  if (!B.runs) return `<div class="mbudget"><b>💰 Budget ${fmt(budget)}:</b> <span class="bad">not enough for one run</span> <span class="muted">(one run costs about ${fmt(B.first)})</span></div>`;
+  const why = {budget:"your budget is the limit", time:"that's what you can farm in your hours a day and the market can take", market:"that's about what the market takes in a day"}[B.why];
+  const farmH = Object.entries(B.farm).reduce((a, [id, n]) => a + n / Math.max(1e-9, (S.by[id].rate || 0) * speed), 0);
+  const fuses = Object.entries(B.fuse).reverse();   // deepest fusions first
+  return `<div class="mbudget"><b>💰 With ${fmt(budget)}:</b> do <b>${fmt(B.runs)} run${B.runs === 1 ? "" : "s"}</b> <span class="muted small">(${why})</span>
+    <ol class="small">
+      ${Object.entries(B.buy).map(([id, n]) => `<li>🛒 ${instantBuy ? "Buy" : "Buy order for"} <b>${n.toLocaleString("en-US")}×</b> ${N(id)} <span class="muted">${instantBuy ? "avg" : "@"} ${fmt(B.each[id])} each = ${fmt(B.each[id] * n)}</span></li>`).join("")}
+      ${Object.entries(B.farm).map(([id, n]) => `<li>🏹 Farm <b>${n.toLocaleString("en-US")}×</b> ${N(id)} <span class="muted">(~${dur(3600 * n / Math.max(1e-9, (S.by[id].rate || 0) * speed))})</span></li>`).join("")}
+      ${fuses.map(([id, f]) => `<li>⚗ Fuse <b>${f.runs.toLocaleString("en-US")}×</b> ${f.fa}× ${N(f.a)} + ${f.fb}× ${N(f.b)} → ${(f.runs * f.q).toLocaleString("en-US")}× ${N(id)}</li>`).join("")}
+      <li>⚗ Fuse <b>${B.runs.toLocaleString("en-US")}×</b> ${p.fa}× ${N(p.a)} + ${p.fb}× ${N(p.b)} → ${(B.runs * B.q).toLocaleString("en-US")}× ${N(p.out)}</li>
+      <li>🏷 Sell offer <b>${(B.runs * B.q).toLocaleString("en-US")}×</b> ${N(p.out)} @ ${fmt(p.sell)}</li>
+    </ol>
+    <div class="small">Spend <b>${fmt(B.cost)}</b>${farmH ? ` + ~${dur(3600 * farmH)} farming` : ""} → get back <b>${fmt(B.revenue)}</b> after tax = <b class="good">+${fmt(B.profit)}</b>${B.thin ? ' <span style="color:var(--warn)">⚠ more than the order book shows, so the price may climb</span>' : ""}</div></div>`;
+}
 // ---------- Money making sub-tab ----------
 // What testing showed: buying everything and flipping instantly barely makes anything, and farming then
 // selling instantly loses to just selling rare drops. What works is farming a fast, cheap shard, fusing it with
 // cheap bought partners, and selling the result with a sell offer. So that's what this tab shows.
-const MONEY_UI_DEF = {speed:50, hours:2, depth:3, multi:false, borderline:false, live:true, q:""};
+const MONEY_UI_DEF = {speed:50, hours:2, depth:3, multi:false, borderline:false, live:true, q:"", budget:""};
 const REALISTIC = 0.5;                // the model is optimistic (catch rates, order fills, competition): plan on half
 const WORTH = 6e6, BORDER = 3e6;      // realistic coins/hour to count as worth doing / borderline
 function moneyFindings(S, bz, u){
@@ -3290,9 +3355,11 @@ function moneyFindings(S, bz, u){
 function moneyHTML2(S, bz, u){
   const f = moneyFindings(S, bz, u), age = Math.round((Date.now() - bz.t) / 1000);
   const N = id => shardName(S.by[id]);
+  const budget = parseCoins(u.budget) || (CUR ? (CUR.st.purse || 0) + (CUR.st.bank || 0) : 0);
   const areaOf = p => p.areas.map(esc).join(", ");
   const steps = p => `<ul class="chain small"><li>⚗ Final fusion: ${p.fa}× ${N(p.a)} + ${p.fb}× ${N(p.b)} → <b>${p.q}×</b> ${N(p.out)} <span class="muted">sell offer @ ${fmt(p.sell)}</span>
-    <ul>${p.a === p.b ? farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.a, p.fa + p.fb) : farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.a, p.fa) + farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.b, p.fb)}</ul></li></ul>`;
+    <ul>${p.a === p.b ? farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.a, p.fa + p.fb) : farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.a, p.fa) + farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.b, p.fb)}</ul></li></ul>
+    ${budgetHTML(S, bz, p, "farm", budget, p.runsHr * u.hours, true, u.speed / 100)}`;
   const list = (o, icon) => Object.entries(o).map(([id, n]) => `${fmt(n)}× ${N(id)}`).join(" + ");
   const hide = p => u.q && !(S.by[p.out].name + " " + Object.keys(p.need.farm).map(k => S.by[k].name).join(" ")).toLowerCase().includes(u.q.toLowerCase());
   const row = p => `<tr${hide(p) ? ' style="display:none"' : ""}>
@@ -3318,9 +3385,9 @@ function moneyHTML2(S, bz, u){
 
     ${f.passive.length ? `<h3 class="ph" style="margin-top:18px">💤 Passive order flip <span class="muted small">(optional, needs spare coins)</span></h3>
     <p class="muted small">No farming: put buy orders on both inputs, fuse, and list a sell offer. Only high-volume flips without price-gap warnings. It works only while your orders keep filling.</p>
-    <div class="card"><table><thead><tr><th>Buy orders</th><th>Make → sell offer</th><th>Per run</th><th>Per day (est.)</th><th>Coins in orders</th></tr></thead><tbody>
+    <div class="card"><table><thead><tr><th>Buy orders</th><th>Make → sell offer</th><th>Per run</th><th>Per day (est.)</th><th>Coins in orders</th><th></th></tr></thead><tbody>
     ${f.passive.map(x => `<tr><td class="small">${x.fa}× ${N(x.a)} + ${x.fb}× ${N(x.b)}${x.steps > 1 ? `<div class="muted">🔗 ${x.steps}-step</div>` : ""}</td><td>${x.n}× ${N(x.out)}<div class="muted small">@ ${fmt(x.sell)}</div></td>
-      <td class="good">+${fmt(x.p)}<div class="muted small">${(x.roi * 100).toFixed(0)}% return</div></td><td>${fmt(x.daily)}<div class="muted small">market ~${fmt(x.perDay)} runs/day</div></td><td>${fmt(x.cost * Math.min(50, x.perDay * 0.25))}</td></tr>`).join("")}
+      <td class="good">+${fmt(x.p)}<div class="muted small">${(x.roi * 100).toFixed(0)}% return</div></td><td>${fmt(x.daily)}<div class="muted small">market ~${fmt(x.perDay)} runs/day</div></td><td>${fmt(x.cost * Math.min(50, x.perDay * 0.25))}</td><td class="small"><details><summary>How</summary>${budgetHTML(S, bz, x, "chain", budget, Math.min(50, x.perDay * 0.25), false, 1)}</details></td></tr>`).join("")}
     </tbody></table></div>` : ""}
 
     <details class="card small" style="margin-top:16px"><summary><b>What isn't shown, and why</b></summary><ul>
@@ -3339,6 +3406,7 @@ function moneyPane(){
       <label class="chk">Hours a day ${opt("muHours", u.hours, [[1,"1h"],[2,"2h"],[4,"4h"],[8,"8h"]])}</label>
       <label class="chk">Chains ${opt("muDepth", u.depth, [[1,"Single fusion"],[2,"Up to 2 steps"],[3,"Up to 3 steps"],[4,"Up to 4 steps"]])}</label>
       <label class="chk"><input type="checkbox" id="muMulti" ${u.multi ? "checked" : ""}> Allow farming 2+ kinds</label>
+      <label class="chk" title="Coins you want to spend. Every plan's steps then say exactly what to buy and how many. Write 50m, 1.5b or a plain number; empty uses your purse + bank.">💰 Budget <input id="muBudget" size="9" placeholder="${CUR ? fmt((CUR.st.purse || 0) + (CUR.st.bank || 0)) : "e.g. 50m"}" value="${esc(u.budget)}"></label>
       <input id="muQ" placeholder="Filter shard…" size="14" value="${esc(u.q)}">
       <span class="sp" style="flex:1"></span>
       <label class="chk"><input type="checkbox" id="muLive" ${u.live ? "checked" : ""}> Live</label>
@@ -3348,7 +3416,7 @@ function moneyPane(){
 }
 let MONEY_TIMER = null;
 function initMoney(S, an){
-  const read = () => ({speed:+$("#muSpeed").value, hours:+$("#muHours").value, depth:+$("#muDepth").value, multi:$("#muMulti").checked, live:$("#muLive").checked, q:$("#muQ").value,
+  const read = () => ({speed:+$("#muSpeed").value, hours:+$("#muHours").value, depth:+$("#muDepth").value, multi:$("#muMulti").checked, live:$("#muLive").checked, q:$("#muQ").value, budget:$("#muBudget").value,
     borderline:!!$("#borderBox")?.open});
   const draw = async force => {
     const outEl = $("#moneyOut"); if (!outEl) return;
@@ -3363,6 +3431,7 @@ function initMoney(S, an){
   };
   ["#muSpeed", "#muHours", "#muDepth", "#muMulti", "#muLive"].forEach(s => $(s).addEventListener("change", () => draw(false)));
   $("#muQ").addEventListener("input", () => draw(false));
+  $("#muBudget").addEventListener("change", () => draw(false));
   $("#muRefresh").addEventListener("click", () => draw(true));
   clearInterval(MONEY_TIMER);
   MONEY_TIMER = setInterval(() => {
@@ -4191,7 +4260,7 @@ function forgeHTML(st){
     <div class="card"><table data-limit="15"><thead><tr><th>Forge</th><th>Inputs (bought now)</th><th>Time</th><th>Profit</th><th>Per hour</th><th>Return</th></tr></thead><tbody>
     ${usable.map(r => `<tr${r.profit <= 0 ? ' style="opacity:.5"' : ""}><td><b>${r.count > 1 ? r.count + "× " : ""}${esc(nm(r.out))}</b>${r.req ? `<div class="muted small">${(tier || 0) >= r.req ? "" : "🔒 "}needs HotM ${r.req}</div>` : ""}${r.vol != null && r.vol < 1000 ? '<div class="small" style="color:var(--warn)">⚠ low volume</div>' : ""}</td>
       <td class="small">${r.inputs.map(([id, n]) => `${fmt(n)}× ${esc(nm(id))}`).join(", ")}<div class="muted">cost ${fmt(r.cost)} → sells ${fmt(r.sell)}</div></td>
-      <td>${dur(r.hours)}</td><td class="${r.profit > 0 ? "good" : "bad"}"><b>${r.profit > 0 ? "+" : ""}${fmt(r.profit)}</b></td><td>${r.profit > 0 ? fmt(r.perHr) : "—"}</td><td class="small">${r.cost ? Math.round(r.roi * 100) + "%" : "—"}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No priced forge recipes.</td></tr>`}
+      <td>${dur(r.hours * 3600)}</td><td class="${r.profit > 0 ? "good" : "bad"}"><b>${r.profit > 0 ? "+" : ""}${fmt(r.profit)}</b></td><td>${r.profit > 0 ? fmt(r.perHr) : "—"}</td><td class="small">${r.cost ? Math.round(r.roi * 100) + "%" : "—"}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No priced forge recipes.</td></tr>`}
     </tbody></table></div>
     <p class="muted small">${FORGE_RECIPES.length} forge recipes from the NEU repo, priced live: inputs at instant-buy / lowest BIN, output after Bazaar tax or ~2% AH fees. Times include your Quick Forge (${Math.round(cut * 100)}%). "Per hour" is per forge slot; long forges earn while you're offline, so profit per craft matters more if you only check in once a day. Recipes whose items have no price right now are left out.</p>`;
 }
