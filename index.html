@@ -2131,7 +2131,16 @@ async function mwLoadMedians(){
   if (tab === "money") render();
 }
 // what one item costs to buy
-function mwBuy(id, P, S){ const b = P.bz[id]; if (b) return S.mode === "offer" ? (b.bid || b.ask) : (b.ask || b.bid); return P.bin[id] || 0; }
+// (instant-buy needs someone selling: with no sell offers on the Bazaar it can't be bought instantly at all)
+function mwBuy(id, P, S){ const b = P.bz[id]; if (b) return S.mode === "offer" ? (b.bid || b.ask) : b.ask; return P.bin[id] || 0; }
+// average price of filling qty from an order book ([price, amount] best first); past the listed orders the last price is used
+function bookAvg(book, qty){
+  if (!book?.length || !(qty > 0)) return {avg:book?.[0]?.[0] || 0, thin:false};
+  let left = qty, cost = 0;
+  for (const [p, n] of book){ const t = Math.min(left, n); cost += t * p; left -= t; if (left <= 0) break; }
+  const thin = left > 0; if (thin) cost += left * book[book.length - 1][0];
+  return {avg:cost / qty, thin};
+}
 function mwDrops(list, P, S){
   return list.map(d => { const id = mwId(d.item, P), s = mwSell(id, P, S), known = !!id && !!(P.bz[id] || P.bin[id] || P.npc[id]); return {...d, id, unit:s.v, src:s.src, known, ev:d.p * d.qty * s.v}; }).sort((a, b) => b.ev - a.ev);
 }
@@ -2254,27 +2263,54 @@ function mwFlips(P, S, capital){
   }
   return out.sort((a, b) => b.hour - a.hour).slice(0, 40);
 }
-// Craft flips: buy the ingredients on the Bazaar, craft, sell the result on the Bazaar
-async function mwCraftFlips(P, S, capital){
-  const ids = Object.keys(P.bz).filter(id => /^ENCHANTED_|_BLOCK$|^REFINED_|^COMPACTED_|^ABSOLUTE_|^MUTANT_|^CORRUPTED_|^POLISHED_|^BOX_OF_/.test(id));
+// Craft flips: buy the ingredients on the Bazaar, craft, sell the result on the Bazaar.
+// Loading only fetches the recipes; the numbers are worked out on every render from the live order book.
+const MW_CRAFT_RE = /^ENCHANTED_|_BLOCK$|^REFINED_|^COMPACTED_|^ABSOLUTE_|^MUTANT_|^CORRUPTED_|^POLISHED_|^BOX_OF_/;
+async function mwCraftFlips(P){
+  const ids = Object.keys(P.bz).filter(id => MW_CRAFT_RE.test(id));
   let done = 0;
   await pool(ids, 12, async id => { await fetchNeu(id); if (++done % 40 === 0) status(`Checking recipes… ${done}/${ids.length}`); });
   status("");
-  const out = [];
-  for (const id of ids){
-    const b = P.bz[id]; if (!b?.bid) continue;
+  return ids;
+}
+// is a recipe's collection requirement ("Requires: Nether Wart IV", sometimes "Requires Snow Collection V") met?
+function mwCraftReq(id, st){
+  const req = NEU[id]?.req || ""; if (!req) return {req:"", ok:true};
+  const m = req.match(/Requires:?\s*([A-Za-z' ]+?)(?: Collection)? ([IVXL]+|\d+)\s*$/i);
+  if (!m || !st?.collections) return {req, ok:true};
+  const name = m[1].trim().toLowerCase(), need = roman(m[2].toUpperCase()), cn = x => String(x.name).toLowerCase();
+  const c = st.collections.find(x => cn(x) === name) || st.collections.find(x => name.startsWith(cn(x)) || cn(x).startsWith(name));
+  return {req, ok:c ? c.tier >= need : true};
+}
+function mwCraftRows(P, S, capital, st){
+  const out = [], tax = 1 - S.tax / 100, instant = S.mode !== "offer";
+  for (const id of MW.craft || []){
+    const b = P.bz[id]; if (!b) continue;
+    const sellPx = instant ? b.bid : (b.ask || b.bid); if (!sellPx) continue;
     for (const r of NEU[id]?.recipes || []){
-      if (r.type !== "craft" || !r.inputs.every(([i]) => P.bz[i])) continue;
-      const cost = r.inputs.reduce((a, [i, n]) => a + n * mwBuy(i, P, S), 0), sellOne = (S.mode === "offer" ? b.ask || b.bid : b.bid) * (1 - S.tax / 100);
-      const profit = sellOne * r.out - cost; if (profit <= 0 || !cost) continue;
-      // crafts per hour: your share of the result's trading, of each ingredient's trading, and what your coins can fund
-      const vol = (S.mode === "offer" ? b.askVol : b.bidVol) / 168;
-      const crafts = Math.min(vol * S.share / 100 / r.out, ...r.inputs.map(([i, n]) => ((S.mode === "offer" ? P.bz[i].bidVol : P.bz[i].askVol) || 0) / 168 * S.share / 100 / n), capital / cost);
-      const qty = crafts * r.out;
-      out.push({id, name:mwName(id), inputs:r.inputs, out:r.out, cost, sell:sellOne * r.out, profit, pct:profit / cost * 100, vol, hour:qty / r.out * profit});
+      if (r.type !== "craft" || !r.inputs.every(([i]) => P.bz[i]) || r.inputs.some(([i]) => i === id)) continue;
+      const buys = r.inputs.map(([i]) => mwBuy(i, P, S)); if (buys.some(x => !x)) continue;   // an ingredient nobody is selling
+      const cost = r.inputs.reduce((a, [, n], k) => a + n * buys[k], 0), sell = sellPx * tax * r.out, profit = sell - cost;
+      if (profit <= 0) continue;
+      // crafts per hour: your share of the result's trading and of each ingredient's, and what your coins can fund
+      const vol = (instant ? b.bidVol : b.askVol) / 168;
+      const maxN = Math.min(vol * S.share / 100 / r.out, ...r.inputs.map(([i, n]) => ((instant ? P.bz[i].askVol : P.bz[i].bidVol) || 0) / 168 * S.share / 100 / n), capital / cost);
+      let best = {n:0, hour:0, thin:false, per:profit};
+      if (instant){
+        // buying and selling that many at once walks down the order book, so try smaller batches too
+        for (let n = maxN, k = 0; n >= 1 && k < 12; n /= 2, k++){
+          let thin = false;
+          const c = r.inputs.reduce((a, [i, q]) => { const x = bookAvg(P.bz[i].askBook, q * n); thin ||= x.thin; return a + q * x.avg; }, 0);
+          const sx = bookAvg(b.bidBook, r.out * n); thin ||= sx.thin;
+          const per = sx.avg * tax * r.out - c;
+          if (per * n > best.hour) best = {n, hour:per * n, thin, per};
+        }
+      } else if (maxN >= 1) best = {n:maxN, hour:profit * maxN, thin:false, per:profit};
+      const rq = mwCraftReq(id, st);
+      out.push({id, name:mwName(id), inputs:r.inputs, out:r.out, cost, sell, profit, pct:profit / cost * 100, crafts:best.n, per:best.per, hour:best.hour, thin:best.thin, req:rq.req, locked:!rq.ok});
     }
   }
-  return out.sort((a, b) => b.hour - a.hour).slice(0, 40);
+  return out.filter(f => !(S.only !== false && f.locked)).sort((a, b) => b.hour - a.hour || b.profit - a.profit).slice(0, 40);
 }
 
 // ---------- more ways to make coins: fishing, pests, Diana, mob grinding, minibosses, corpses, foraging, minions, the Forge, NPC flips ----------
@@ -2948,14 +2984,18 @@ function mwFlipsHTML(flips, S, capital){
   const share = `<label class="inline">your share of each item's trading <input type="number" min="0.5" max="100" step="0.5" data-mset="share" value="${esc(S.share)}">%</label>`;
   const bz = flips.length ? `<div class="card"><table data-limit="15"><thead><tr><th>Item</th><th class="mnum">Buy order at</th><th class="mnum">Sell offer at</th><th class="mnum">Profit each</th><th class="mnum">Traded / hour</th><th class="mnum">Coins / hour</th></tr></thead><tbody>
     ${flips.map(f => `<tr><td><b>${esc(f.name)}</b></td><td class="mnum">${fmt(f.buy)}</td><td class="mnum">${fmt(f.sellAt)}</td><td class="mnum">${fmt(f.margin)} <span class="small muted">${f.pct.toFixed(1)}%</span></td><td class="mnum small">${fmt(f.vol)}</td><td class="mnum"><b class="good">${fmt(f.hour)}</b></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No profitable flips with enough volume right now.</div>`;
-  const cf = MW.craft;
-  const craft = cf ? (cf.length ? `<div class="card"><table data-limit="15"><thead><tr><th>Craft</th><th class="mnum">Ingredients cost</th><th class="mnum">Sells for</th><th class="mnum">Profit each craft</th><th class="mnum">Coins / hour</th></tr></thead><tbody>
-    ${cf.map(f => `<tr><td><b>${esc(f.name)}</b>${f.out > 1 ? ` ×${f.out}` : ""}<div class="small muted">${f.inputs.map(([i, n]) => `${fmt(n)} ${esc(mwName(i))}`).join(", ")}</div></td><td class="mnum">${fmt(f.cost)}</td><td class="mnum">${fmt(f.sell)}</td><td class="mnum">${fmt(f.profit)} <span class="small muted">${f.pct.toFixed(1)}%</span></td><td class="mnum"><b class="good">${fmt(f.hour)}</b></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No craft is profitable at today's prices.</div>`)
+  const cf = MW.craft ? mwCraftRows(MW.P, S, capital, CUR?.st) : null;
+  const px = n => n >= 100 ? fmt(n) : n.toFixed(1);
+  const craft = cf ? (cf.length ? `<div class="card"><table data-limit="15"><thead><tr><th>Craft</th><th class="mnum">Ingredients cost</th><th class="mnum">Sells for</th><th class="mnum">Profit each craft</th><th class="mnum">Crafts / hour</th><th class="mnum">Coins / hour</th></tr></thead><tbody>
+    ${cf.map(f => `<tr${f.hour <= 0 ? ' style="opacity:.55"' : ""}><td><b>${esc(f.name)}</b>${f.out > 1 ? ` ×${f.out}` : ""}<div class="small muted">${f.inputs.map(([i, n]) => `${fmt(n)} ${esc(mwName(i))} @ ${px(mwBuy(i, MW.P, S))}`).join(", ")}</div>${f.req ? `<div class="small${f.locked ? "" : " muted"}">${f.locked ? "🔒 " : ""}${esc(f.req)}</div>` : ""}</td>
+      <td class="mnum">${fmt(f.cost)}</td><td class="mnum">${fmt(f.sell)}</td><td class="mnum">${fmt(f.profit)} <span class="small muted">${f.pct.toFixed(1)}%</span></td>
+      <td class="mnum small">${f.crafts >= 1 ? fmt(f.crafts) : "—"}</td>
+      <td class="mnum">${f.hour > 0 ? `<b class="good">${fmt(f.hour)}</b>` : '<span class="muted">—</span>'}${f.hour > 0 && f.per < f.profit * 0.9 ? `<div class="small muted">${fmt(f.per)} each at that amount</div>` : ""}${f.thin ? '<div class="small" style="color:var(--warn)">⚠ thin order book</div>' : ""}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No craft is profitable at today's prices.</div>`)
     : `<button class="mini" data-mcraft${MW.craftBusy ? " disabled" : ""}>${MW.craftBusy ? "Checking recipes…" : "🔎 Find craft flips"}</button> <span class="small muted">Checks the recipes of every enchanted and compacted Bazaar item (the first time takes a minute).</span>`;
   return `<h4>💱 Bazaar flips</h4><p class="muted small">Put a buy order at the top bid, then a sell offer at the lowest ask (${S.tax}% tax). Coins/hour assumes ${share}, never more than your purse + bank (${fmt(capital)}). Prices move; check the spread before you commit.</p>${bz}
     ${mwNpcHTML(S)}
     ${CUR ? mwCofCraftsHTML(CUR.st, S) : ""}
-    <h4>🔨 Bazaar enchanting crafts</h4><p class="muted small">Buy the ingredients (${S.mode === "offer" ? "buy orders" : "instant buy"}), craft, sell the result on the Bazaar. Coins/hour uses the same share of the result's and each ingredient's trading, and never more than your purse + bank.</p>${craft}`;
+    <h4>🔨 Bazaar enchanting crafts</h4><p class="muted small">${S.mode === "offer" ? "Buy the ingredients with buy orders at the top bid, craft, and sell the result with a sell offer at the lowest ask (orders take time to fill)." : "Instant-buy the ingredients, craft, and instant-sell the result."} Prices are the real top of the order book, after ${S.tax}% tax${S.mode === "offer" ? "" : "; for the hourly amount, buying and selling that many is priced down the order book, so big batches earn less per craft"}. Coins/hour uses ${S.share}% of the result's and each ingredient's trading, never more than your purse + bank. Ingredients nobody is selling right now are skipped${S.only !== false ? ", and so are recipes your collections haven't unlocked" : ""}.</p>${craft}`;
 }
 function mwDetail(m){
   const S = mwSet(), tIn = m.time;
@@ -2992,13 +3032,13 @@ document.addEventListener("click", e => {
   }
   if (e.target.closest("[data-mcraft]") && !MW.craftBusy){
     MW.craftBusy = true; render();
-    mwCraftFlips(MW.P, mwSet(), CUR ? (CUR.st.purse || 0) + (CUR.st.bank || 0) : 0).then(r => MW.craft = r).catch(err => { console.error(err); MW.craft = []; }).finally(() => { MW.craftBusy = false; if (tab === "money") render(); });
+    mwCraftFlips(MW.P).then(r => MW.craft = r).catch(err => { console.error(err); MW.craft = []; }).finally(() => { MW.craftBusy = false; if (tab === "money") render(); });
   }
 });
 document.addEventListener("change", e => {
   const s = e.target.closest("[data-mset]"), t = e.target.closest("[data-mtime]"); if (!s && !t) return;
   const S = store.get("money:set", {});
-  if (s){ const k = s.dataset.mset; S[k] = s.type === "checkbox" ? s.checked : s.value === "" ? "" : isNaN(+s.value) ? s.value : +s.value; if (k === "mode" || k === "share" || k === "tax") { MW.craft = null; MW.npc = null; MW.motes = null; MW.cur = null; }
+  if (s){ const k = s.dataset.mset; S[k] = s.type === "checkbox" ? s.checked : s.value === "" ? "" : isNaN(+s.value) ? s.value : +s.value; if (k === "mode" || k === "share" || k === "tax") { MW.npc = null; MW.motes = null; MW.cur = null; }
     if (k === "preset"){ for (const g of ["bps", "uptime", "scph", "pph", "bph", "cph", "lph", "hotspot"]) S[g] = ""; for (let i = localStorage.length - 1; i >= 0; i--){ const lk = localStorage.key(i); if (lk && lk.includes("money:t:")) localStorage.removeItem(lk); } } store.set("money:set", S); }
   if (t){ const v = +t.value; if (t.dataset.global) { S[t.dataset.mtime] = v > 0 ? v : MW_DEF[t.dataset.mtime]; store.set("money:set", S); } else store.set("money:t:" + t.dataset.mtime, v > 0 ? v : 0); }
   if (tab === "money") render();
@@ -3014,9 +3054,11 @@ async function loadBazaarFull(force){
   const m = {};
   for (const [id, p] of Object.entries(j.products || {})){
     const q = p.quick_status; if (!q) continue;
-    // buyPrice = cheapest sell offer (what instant-buy costs / where a sell offer goes)
-    // sellPrice = highest buy order (what instant-sell pays / where a buy order goes)
-    m[id] = {ask:q.buyPrice, bid:q.sellPrice, askVol:q.buyMovingWeek, bidVol:q.sellMovingWeek};
+    // ask = cheapest sell offer (what instant-buy costs / where a sell offer goes)
+    // bid = highest buy order (what instant-sell pays / where a buy order goes)
+    // taken from the order book itself: quick_status prices are an average of the top 2% of orders and can be far off the real top
+    const askBook = (p.buy_summary || []).map(o => [o.pricePerUnit, o.amount]), bidBook = (p.sell_summary || []).map(o => [o.pricePerUnit, o.amount]);
+    m[id] = {ask:askBook[0]?.[0] || 0, bid:bidBook[0]?.[0] || 0, askVol:q.buyMovingWeek, bidVol:q.sellMovingWeek, askBook, bidBook};
   }
   if (PRICES) for (const [id, v] of Object.entries(m)) if (v.ask > 0) PRICES.bz[id] = v.ask;  // keep the rest of the app in sync
   return BZFULL = {m, t:Date.now(), updated:j.lastUpdated || Date.now()};
