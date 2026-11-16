@@ -297,6 +297,7 @@ tr:focus-visible{outline-offset:-2px}
 .mtop{margin:10px 0;border-left:3px solid var(--good,#5fd068)}.mtop .big{font-size:20px;margin:2px 0}
 .mnum{text-align:right;white-space:nowrap}
 label.inline input{width:64px;margin:0 2px}
+.pill.warn{background:#4a3a12;color:#ffd27a;border-color:#6b5418}
 .mspeedrow{margin:8px 0 4px}.mspeed input{width:90px;margin-left:6px}
 </style>
 </head>
@@ -2101,11 +2102,11 @@ async function mwLoadMedians(){
   for (const T of Object.values(D.kuudra)) [...T.free, ...T.paid].forEach(r => names.add(r.item));
   for (const f of Object.values(D.floors)) for (const c of Object.values(f)) c.rows.forEach(r => names.add(r.item));
   if (MW.D2){ for (const m of Object.values(MW.D2.mobs)) (m?.rows || []).forEach(r => names.add(r.item)); for (const rows of Object.values(MW.D2.corpses)) rows.forEach(r => names.add(r.item)); MW.D2.diana.treasure.forEach(t => t.item && names.add(t.item)); }
-  const ids = [...new Set([...names].map(n => mwId(n, P)).filter(id => id && !P.bz[id] && (P.bin[id] || 0) >= 100e3 && !(id in (P.med || {}))))];
+  const ids = [...new Set([...[...names].map(n => mwId(n, P)), ...(MW.motes || []).map(m => m.id)].filter(id => id && !P.bz[id] && (P.bin[id] || 0) >= 100e3 && !(id in (P.med || {}))))];
   if (!ids.length) return;
   MW.medBusy = true; P.med ||= {};
   await pool(ids, 4, async id => {
-    try { const j = await cachedJSON("https://sky.coflnet.com/api/item/price/" + encodeURIComponent(id), 6 * 3600e3); P.med[id] = j?.volume > 0 && j.median > 0 ? j.median : 0; }
+    try { const j = await cachedJSON("https://sky.coflnet.com/api/item/price/" + encodeURIComponent(id), 6 * 3600e3); P.med[id] = j?.volume > 0 && j.median > 0 ? j.median : 0; (P.medVol ||= {})[id] = +j?.volume || 0; }
     catch { P.med[id] = 0; }
   });
   MW.medBusy = false;
@@ -2118,7 +2119,7 @@ function mwDrops(list, P, S){
 }
 
 // ---------- methods ----------
-const MW_DEF = {mode:"instant", tax:1.25, mf:0, ff:"", bps:19, ms:"", mfort:"", gfort:"", pristine:"", uptime:70, share:5};
+const MW_DEF = {mode:"instant", tax:1.25, mf:0, ff:"", bps:"", ms:"", mfort:"", gfort:"", pristine:"", uptime:"", share:5, preset:"casual", hf:""};
 const mwSet = () => ({...MW_DEF, ...store.get("money:set", {})});
 const SLAYER_MIN = [1.5, 2, 3, 4, 6];                 // default minutes per boss (incl. spawning) by tier: your speed, change it per boss
 const KUUDRA_MIN = [5, 5, 6, 7, 9];
@@ -2140,16 +2141,16 @@ function mwFarmFortune(st, upKey){
   return {parts, total:parts.reduce((a, p) => a + p[1], 0)};
 }
 function mwMethods(st, D, P, S){
-  const M = [], sell = id => mwSell(id, P, S);
+  const M = [], sell = id => mwSell(id, P, S), PR = mwPre(S);
   // slayers
   for (const [id, page, icon] of MW_SLAYERS){
     const s = st.slayers?.find(x => x.id === id), lvl = s?.level || 0, kills = s?.kills || [];
     for (const t of D.slayers[id] || []){
       const key = `slayer:${id}:${t.tier}`, ok = t.tier === 1 || (kills[t.tier - 2] || 0) > 0 || (kills[t.tier - 1] || 0) > 0;
-      const drops = mwDrops(slayerOdds(t.rows, lvl, S.mf), P, S), min = mwTime(key, SLAYER_MIN[t.tier - 1]);
+      const drops = mwDrops(slayerOdds(t.rows, lvl, S.mf), P, S), min = mwTime(key, PR.slayer[t.tier - 1]);
       M.push({key, cat:"slayer", icon, name:`${page} T${t.tier}`, ok, why:ok ? "" : `Beat Tier ${t.tier - 1} first`, unit:"boss", perH:60 / min,
         gross:drops.reduce((a, d) => a + d.ev, 0), cost:t.cost || 0, drops, costs:[["Spawn cost (Maddox)", t.cost || 0]],
-        time:{key, def:SLAYER_MIN[t.tier - 1], val:min, label:"minutes per boss, including spawning it"},
+        time:{key, def:PR.slayer[t.tier - 1], val:min, label:"minutes per boss, including spawning it"},
         notes:[`Drop chances from the wiki at your slayer level (${lvl})${S.mf ? ` with ${S.mf} Magic Find` : ""}. Combat and slayer XP aren't counted.`]});
     }
   }
@@ -2161,11 +2162,11 @@ function mwMethods(st, D, P, S){
     const drops = mwDrops([...T.free, ...T.paid], P, S);
     const red = mwBuy("ENCHANTED_RED_SAND", P, S), myc = mwBuy("ENCHANTED_MYCELIUM", P, S);
     const mat = C.fac === "mages" ? "Mycelium" : C.fac === "barbarians" ? "Red Sand" : myc < red ? "Mycelium" : "Red Sand";
-    const [coins, n] = MW_KEYS[i], matCost = n * (mat === "Mycelium" ? myc : red), min = mwTime(key, KUUDRA_MIN[i]);
+    const [coins, n] = MW_KEYS[i], matCost = n * (mat === "Mycelium" ? myc : red), min = mwTime(key, PR.kuudra[i]);
     M.push({key, cat:"kuudra", icon:"🐙", name:`Kuudra ${tn}`, ok:prevOk && repOk, why:!prevOk ? `Beat ${["Basic", "Hot", "Burning", "Fiery"][i - 1]} first` : !repOk ? `Needs ${fmt(KUUDRA_TIERS[i][2])} reputation for its key` : "",
       unit:"run", perH:60 / min, gross:drops.reduce((a, d) => a + d.ev, 0), cost:coins + matCost, drops,
       costs:[["Kuudra Key coins (up to 20% less with reputation)", coins], [`Kuudra Key: ${n} Enchanted ${mat}`, matCost], ["Kuudra Key: 2 Nether Stars (from Vanquishers, not priced)", 0]],
-      time:{key, def:KUUDRA_MIN[i], val:min, label:"minutes per run"},
+      time:{key, def:PR.kuudra[i], val:min, label:"minutes per run"},
       notes:["Free chest plus both slots of the paid chest, with chances from the wiki's Kuudra loot tables (the wiki marks them as not fully confirmed).", "Armor is valued at its lowest BIN; pieces with good attributes sell for much more."]});
   });
   // Catacombs: one chest is claimed per run, so a run is worth its best chest after paying for it
@@ -2174,11 +2175,11 @@ function mwMethods(st, D, P, S){
     const ok = (comp[n] || 0) > 0 || (n === 1 ? (!mm || (st.floors?.[7] || 0) > 0) : (comp[n - 1] || 0) > 0);
     const per = Object.entries(chests).map(([name, c]) => { const drops = mwDrops(c.rows, P, S), ev = drops.reduce((a, d) => a + d.ev, 0), cost = c.base + c.rows.reduce((a, r) => a + r.p * r.add, 0); return {name, ev, cost, net:ev - cost, drops}; }).sort((a, b) => b.net - a.net);
     const best = per[0]; if (!best) continue;
-    const key = `dungeon:${fk}`, min = mwTime(key, FLOOR_MIN[fk]);
+    const key = `dungeon:${fk}`, fdef = Math.max(2, Math.round(FLOOR_MIN[fk] * PR.floor * 2) / 2), min = mwTime(key, fdef);
     M.push({key, cat:"dungeon", icon:mm ? "☠" : "💀", name:`${mm ? "Master Mode " : ""}Floor ${FLOOR_R[n - 1]}`, ok,
       why:ok ? "" : mm && n === 1 ? "Beat Floor VII first" : `Beat ${mm ? "Master Mode " : ""}Floor ${FLOOR_R[n - 2]} first`,
       unit:"run", perH:60 / min, gross:best.ev, cost:best.cost, drops:best.drops, chests:per, costs:[[`${best.name} chest (its price, plus what its rolls add on average)`, best.cost]],
-      time:{key, def:FLOOR_MIN[fk], val:min, label:"minutes per run"},
+      time:{key, def:fdef, val:min, label:"minutes per run"},
       notes:[`Claims the ${best.name} chest: the best on average after its price (S+ score assumed). You see the chests before choosing, so in practice you do a little better.`, "Chances are the wiki's averages without bonuses (no Boss Luck or Treasure accessories)."]});
   }
   // farming
@@ -2191,16 +2192,16 @@ function mwMethods(st, D, P, S){
     const drops = [{item:name, id, p:1, qty, unit, src, known:!!unit, ev:qty * unit}];
     if (id === "WHEAT"){ const sd = sell("SEEDS"), q = 1.5 * (1 + ff / 100); drops.push({item:"Seeds", id:"SEEDS", p:1, qty:q, unit:sd.v, src:sd.src, known:!!sd.v, ev:q * sd.v}); }
     const ok = gLvl >= need;
-    M.push({key:`farm:${id}`, cat:"farm", icon:"🌾", name, ok, why:ok ? "" : `Needs Garden level ${need}`, unit:"harvest", perH:S.bps * 3600, gross:drops.reduce((a, d) => a + d.ev, 0), cost:0, drops, costs:[],
-      time:{key:"bps", def:19, val:S.bps, label:"crops broken per second (20 is the cap)", global:true}, fortune:{...f, used:ff, manual},
+    M.push({key:`farm:${id}`, cat:"farm", icon:"🌾", name, ok, why:ok ? "" : `Needs Garden level ${need}`, unit:"harvest", perH:(+S.bps || PR.bps) * 3600, gross:drops.reduce((a, d) => a + d.ev, 0), cost:0, drops, costs:[],
+      time:{key:"bps", def:PR.bps, val:+S.bps || PR.bps, label:"crops broken per second (20 is the cap)", global:true}, fortune:{...f, used:ff, manual},
       notes:[`${base} base drops per harvest (wiki), × (1 + ${fmt(ff)} Farming Fortune / 100).`, manual ? "Uses the Farming Fortune you entered." : "Fortune is estimated from your profile only (levels, plots, crop upgrade): gear, pets and accessories aren't in the API. Enter your real Farming Fortune at the top for accurate numbers."]});
   }
   // mining
-  const ms = +S.ms || 0, up = (+S.uptime || 70) / 100;
+  const ms = +S.ms || 0, up = (+S.uptime || PR.uptime) / 100;
   const ticks = str => ms > 60 * str ? 1 : Math.max(4, Math.round(30 * str / ms));
   const islOk = isl => { const I = ISLANDS.find(i => i.id === isl); return I ? !islandReq(st, I).locked : true; };
   const islName = isl => ISLANDS.find(i => i.id === isl)?.name || isl;
-  const mineTime = {key:"uptime", def:70, val:+S.uptime || 70, label:"% of your time spent actually breaking blocks", global:true};
+  const mineTime = {key:"uptime", def:PR.uptime, val:+S.uptime || PR.uptime, label:"% of your time spent actually breaking blocks", global:true};
   for (const [name, id, isl, mult, note] of MW_ORES){
     const strs = D.strength[name] || []; if (!strs.length) continue;
     const variants = name === "Mithril" ? strs.map((s, i) => [s, [1, 2, 5][i] || 1]) : [[strs[0], mult || 1]];
@@ -2272,7 +2273,7 @@ const MW2_LOGS = [["Oak", "LOG", "hub"], ["Birch", "LOG:2", "park"], ["Spruce", 
 const GRIFFIN_RAR = ["COMMON", "UNCOMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC"];
 function mw2Titles(){
   const sea = [...new Set(MW2_FISH.flatMap(([isl]) => (MAP_EXTRA[isl]?.sea || []).map(s => s[0])))];
-  return [...sea, ...MW2_PESTS, ...MW2_DIANA, ...MW2_GRIND.map(g => g[0]), ...MW2_MINI, "Mythological Ritual", "Griffin Burrows/Item Loot/Ancestral Spade", ...new Set(MW2_CORPSES.map(c => c[1])), "Module:Minion/Data"];
+  return [...sea, ...MW2_PESTS, ...MW2_DIANA, ...MW2_GRIND.map(g => g[0]), ...MW2_MINI, "Mythological Ritual", "Griffin Burrows/Item Loot/Ancestral Spade", ...new Set(MW2_CORPSES.map(c => c[1])), "Module:Minion/Data", "Sea Creatures/List/Hotspot", "Crystal Nucleus"];
 }
 // chance text: "12%", "0.75%[[..|*]]", "1/50k"
 function mwChanceStr(c){
@@ -2350,18 +2351,18 @@ function mw2Parse(P){
   const mobs = {};
   for (const [k, v] of Object.entries(P)) if (v && v.includes("{{Mob Drops Table")) mobs[k] = mwMob(v);
   const corpses = {}; for (const [, page] of MW2_CORPSES) corpses[page] = mwCorpse(P[page]);
-  return {mobs, minions:mwMinionData(P["Module:Minion/Data"]), corpses, diana:mwDiana(P["Mythological Ritual"], P["Griffin Burrows/Item Loot/Ancestral Spade"])};
+  return {mobs, minions:mwMinionData(P["Module:Minion/Data"]), corpses, hotspot:mwHotspots(P["Sea Creatures/List/Hotspot"]), nucleus:mwNucleus(P["Crystal Nucleus"]), diana:mwDiana(P["Mythological Ritual"], P["Griffin Burrows/Item Loot/Ancestral Spade"])};
 }
 
 function mwMethods2(st, D2, P, S, mayor){
-  const M = [], sell = id => mwSell(id, P, S), drops = list => mwDrops(list, P, S);
+  const PR = mwPre(S), M = [], sell = id => mwSell(id, P, S), drops = list => mwDrops(list, P, S);
   const islOk = isl => { const I = ISLANDS.find(i => i.id === isl); return I ? !islandReq(st, I).locked : true; };
   const islName = isl => ISLANDS.find(i => i.id === isl)?.name || isl;
   const ff = S.ff !== "" && +S.ff >= 0 ? +S.ff : mwFarmFortune(st, "").total;
-  const mobValue = (name, ffx) => { const mob = D2.mobs[name]; if (!mob) return null; const d = drops(mwMobDrops(mob, ffx)); return {coins:mob.coins, drops:d, ev:mob.coins + d.reduce((a, x) => a + x.ev, 0)}; };
+  const mobValue = (name, ffx) => { const mob = D2.mobs[name]; if (!mob) return null; const d = drops(mwMobDrops(mob, ffx).map(r => r.p < 0.05 ? {...r, p:Math.min(1, r.p * (1 + (+S.mf || 0) / 100))} : r)); return {coins:mob.coins, drops:d, ev:mob.coins + d.reduce((a, x) => a + x.ev, 0)}; };
   const rate = (key, def) => { const v = +S[key]; return v > 0 ? v : def; };
   // fishing: sea creatures you can catch at your Fishing level, weighted by the wiki's catch shares
-  const fishLvl = st.skills?.find(s => s.id === "FISHING")?.level || 0, scph = rate("scph", 100);
+  const fishLvl = st.skills?.find(s => s.id === "FISHING")?.level || 0, scph = rate("scph", PR.scph);
   for (const [isl, title] of MW2_FISH){
     const list = (MAP_EXTRA[isl]?.sea || []).map(([n, rar, lvl, ch]) => ({n, lvl, w:parseFloat(ch) || 0})).filter(s => s.w > 0 && s.lvl <= Math.max(fishLvl, 1) && D2.mobs[s.n]);
     if (!list.length) continue;
@@ -2370,16 +2371,16 @@ function mwMethods2(st, D2, P, S, mayor){
     const dl = per.flatMap(s => [{item:`${s.n} (${(s.share * 100).toFixed(1)}% of catches)`, id:null, p:s.share, qty:1, unit:s.v.ev, src:`${fmt(s.v.coins)} coins + drops`, known:true, ev:s.share * s.v.ev}]);
     const ok = islOk(isl);
     M.push({key:`fish:${isl}`, cat:"fish", icon:"🎣", name:title, ok, why:ok ? "" : `${islName(isl)} is locked`, unit:"sea creature", perH:scph, gross:dl.reduce((a, d) => a + d.ev, 0), cost:0, drops:dl.sort((a, b) => b.ev - a.ev), costs:[],
-      time:{key:"scph", def:100, val:scph, label:"sea creatures caught per hour", global:true},
+      time:{key:"scph", def:PR.scph, val:scph, label:"sea creatures caught per hour", global:true},
       notes:[`Only creatures your Fishing level (${fishLvl}) can catch, in the wiki's catch shares. Each creature's value is its coins plus its drop table at live prices; click through on the wiki for single drops.`, isl === "jerry" ? "Jerry's Workshop is only open during Late Winter and December." : "", "Fish, treasure and Trophy Fish aren't counted, only sea creatures.", mayor?.perks?.some(p => /sea creature/i.test(p.name)) ? `${mayor.name} is mayor: more Sea Creature Chance means more creatures per hour.` : ""].filter(Boolean)});
   }
   // pests (Garden): drops scale with Farming Fortune
   if (st.garden){
-    const pph = rate("pph", 60);
+    const pph = rate("pph", PR.pph);
     for (const p of MW2_PESTS){
       const v = mobValue(p, ff); if (!v) continue;
       M.push({key:`pest:${p}`, cat:"pest", icon:"🐛", name:`Pest: ${p}`, ok:true, why:"", unit:"pest", perH:pph, gross:v.ev, cost:0, drops:v.drops, costs:[],
-        time:{key:"pph", def:60, val:pph, label:"pests killed per hour", global:true},
+        time:{key:"pph", def:PR.pph, val:pph, label:"pests killed per hour", global:true},
         notes:[`Drops at ${fmt(ff)} Farming Fortune (some pest drops grow with fortune).`, "Pests spawn while you farm, so this adds on top of farming. Vinyls and sprays pick which pest you get."]});
     }
   }
@@ -2388,46 +2389,46 @@ function mwMethods2(st, D2, P, S, mayor){
     const active = [mayor?.perks || [], mayor?.minister?.perk ? [mayor.minister.perk] : []].flat().some(p => /mythological ritual/i.test(p.name));
     const gr = (st.pets || []).filter(p => p.type === "GRIFFIN").map(p => GRIFFIN_RAR.indexOf(p.tier)).sort((a, b) => b - a)[0] ?? -1;
     const cr = D2.diana.creatures.filter(c => GRIFFIN_RAR.indexOf(c.rarity) <= Math.max(gr, 0)), tw = cr.reduce((a, c) => a + c.w, 0);
-    const chain = 4, mobPer = (chain - 1) / chain * 0.75, bph = rate("bph", 100);
+    const chain = 4, mobPer = (chain - 1) / chain * 0.75, bph = rate("bph", PR.bph);
     const dl = [];
     for (const c of cr){ const v = mobValue(c.name); if (!v) continue; dl.push({item:`${c.name} (dug up)`, id:null, p:mobPer * c.w / tw, qty:1, unit:v.ev, src:`${fmt(v.coins)} coins + drops`, known:true, ev:mobPer * c.w / tw * v.ev}); }
     for (const t of D2.diana.treasure){ if (t.coins) dl.push({item:`${fmt(t.coins)} coins (treasure)`, id:null, p:t.p, qty:1, unit:t.coins, src:"coins", known:true, ev:t.p * t.coins}); else dl.push(...drops([{item:t.item, qty:1, p:t.p}])); }
     M.push({key:"diana", cat:"diana", icon:"🦅", name:"Diana: Griffin burrows", ok:active && gr >= 0, why:!active ? `Only while Diana's Mythological Ritual is active (mayor now: ${mayor?.name || "unknown"})` : gr < 0 ? "Needs a Griffin pet" : "",
       unit:"burrow", perH:bph, gross:dl.reduce((a, d) => a + d.ev, 0), cost:0, drops:dl.sort((a, b) => b.ev - a.ev), costs:[],
-      time:{key:"bph", def:100, val:bph, label:"burrows dug per hour", global:true},
+      time:{key:"bph", def:PR.bph, val:bph, label:"burrows dug per hour", global:true},
       notes:[`Ancestral Spade chains of 4: after the first burrow, each is a mob 75% of the time and treasure 25% (wiki).`, `Mobs your ${gr >= 0 ? GRIFFIN_RAR[gr].toLowerCase() : ""} Griffin pet unlocks, in the wiki's spawn weights.`]});
   }
   // mob grinding
   for (const [name, isl, def] of MW2_GRIND){
     const v = mobValue(name); if (!v) continue;
-    const key = `grind:${name}`, kph = mwTime(key, def), ok = islOk(isl);
+    const key = `grind:${name}`, gdef = Math.round(def * PR.grind), kph = mwTime(key, gdef), ok = islOk(isl);
     M.push({key, cat:"mob", icon:"⚔", name, ok, why:ok ? "" : `${islName(isl)} is locked`, unit:"kill", perH:kph, gross:v.ev, cost:0, drops:v.drops, costs:[],
-      time:{key, def, val:kph, label:"kills per hour"}, notes:[`Coins (${fmt(v.coins)}) plus the wiki's drop table. Special drops from rare variants (like Special Zealots) are on their own pages.`]});
+      time:{key, def:gdef, val:kph, label:"kills per hour"}, notes:[`Coins (${fmt(v.coins)}) plus the wiki's drop table. Special drops from rare variants (like Special Zealots) are on their own pages.`]});
   }
   { // Crimson Isle minibosses, taken in turn
     const vs = MW2_MINI.map(n => [n, mobValue(n)]).filter(x => x[1]);
     if (vs.length){
-      const key = "mini", kph = mwTime(key, 25), ok = islOk("crimson");
+      const key = "mini", kph = mwTime(key, PR.mini), ok = islOk("crimson");
       const dl = vs.map(([n, v]) => ({item:n, id:null, p:1 / vs.length, qty:1, unit:v.ev, src:`${fmt(v.coins)} coins + drops`, known:true, ev:v.ev / vs.length}));
       M.push({key, cat:"mob", icon:"👹", name:"Crimson Isle minibosses", ok, why:ok ? "" : "Crimson Isle is locked", unit:"kill", perH:kph, gross:dl.reduce((a, d) => a + d.ev, 0), cost:0, drops:dl, costs:[],
-        time:{key, def:25, val:kph, label:"minibosses killed per hour"}, notes:["Bladesoul, Ashfang, Barbarian Duke X, Mage Outlaw and Magma Boss taken in turn; each respawns 2 minutes after it dies (Magma Boss 5)."]});
+        time:{key, def:PR.mini, val:kph, label:"minibosses killed per hour"}, notes:["Bladesoul, Ashfang, Barbarian Duke X, Mage Outlaw and Magma Boss taken in turn; each respawns 2 minutes after it dies (Magma Boss 5)."]});
     }
   }
   // Glacite Mineshaft corpses
   for (const [type, page, keyId] of MW2_CORPSES){
     const rows = D2.corpses[page]; if (!rows?.length) continue;
-    const dl = drops(rows), keyCost = keyId ? mwBuy(keyId, P, S) : 0, cph = rate("cph", 4), ok = islOk("glacite");
+    const dl = drops(rows), keyCost = keyId ? mwBuy(keyId, P, S) : 0, cph = rate("cph", PR.cph), ok = islOk("glacite");
     M.push({key:`corpse:${type}`, cat:"mine", icon:"🧊", name:`${type} corpse`, ok, why:ok ? "" : "Glacite Tunnels are locked", unit:"corpse", perH:cph, gross:dl.reduce((a, d) => a + d.ev, 0), cost:keyCost, drops:dl,
-      costs:keyId ? [[`${mwName(keyId)}`, keyCost]] : [], time:{key:"cph", def:4, val:cph, label:"corpses of this kind looted per hour", global:true},
+      costs:keyId ? [[`${mwName(keyId)}`, keyCost]] : [], time:{key:"cph", def:PR.cph, val:cph, label:"corpses of this kind looted per hour", global:true},
       notes:["Chances per corpse at base rolls (wiki). Glacite Powder and HotM XP aren't counted."]});
   }
   // foraging
-  const forF = +S.forf || 0, lph = rate("lph", 2500);
+  const forF = +S.forf || 0, lph = rate("lph", PR.lph);
   for (const [name, id, isl] of MW2_LOGS){
     const s = sell(id); if (!s.v) continue;
     const qty = 1 + forF / 100, ok = islOk(isl);
     M.push({key:`log:${id}`, cat:"forage", icon:"🪓", name:`${name} logs`, ok, why:ok ? "" : `${islName(isl)} is locked`, unit:"log", perH:lph, gross:qty * s.v, cost:0,
-      drops:[{item:`${name} Log`, id, p:1, qty, unit:s.v, src:s.src, known:true, ev:qty * s.v}], costs:[], time:{key:"lph", def:2500, val:lph, label:"log blocks broken per hour", global:true},
+      drops:[{item:`${name} Log`, id, p:1, qty, unit:s.v, src:s.src, known:true, ev:qty * s.v}], costs:[], time:{key:"lph", def:PR.lph, val:lph, label:"log blocks broken per hour", global:true},
       notes:[`1 log per block × (1 + ${forF} Foraging Fortune / 100). Galatea trees also give Tree Gifts, which aren't counted.`]});
   }
   for (const m of M){ m.net = m.gross - m.cost; m.hour = m.net * m.perH; m.unknown = m.drops.filter(d => !d.known && d.p >= 0.001); }
@@ -2479,6 +2480,248 @@ async function mwNpcFlips(P, S){
   return out.sort((a, b) => b.profit * Math.min(b.vol, 640) - a.profit * Math.min(a.vol, 640)).slice(0, 40);
 }
 
+// ---------- speed presets: one click sets every rate; your own per-method numbers still win ----------
+const MW_PRESETS = {
+  casual:{label:"Casual", slayer:[1.5, 2, 3, 4, 6], kuudra:[5, 5, 6, 7, 9], floor:1, bps:18, uptime:60, scph:100, pph:60, bph:100, cph:4, lph:2500, grind:1, mini:25, hunt:0.6, hotspot:15, nucleus:15, sludge:40000, rift:4, motes:150000},
+  good:{label:"Good", slayer:[1, 1.5, 2, 2.5, 4], kuudra:[4, 4, 4.5, 5, 6], floor:0.75, bps:19.5, uptime:70, scph:250, pph:120, bph:200, cph:6, lph:4500, grind:2, mini:50, hunt:1, hotspot:55, nucleus:8, sludge:150000, rift:8, motes:300000},
+  endgame:{label:"Endgame", slayer:[0.5, 0.75, 1, 1, 1.5], kuudra:[2, 2, 2.5, 2.5, 3], floor:0.5, bps:20, uptime:85, scph:600, pph:200, bph:350, cph:10, lph:7000, grind:4, mini:100, hunt:1.5, hotspot:85, nucleus:4, sludge:400000, rift:12, motes:420000},
+};
+const mwPre = S => MW_PRESETS[S.preset] || MW_PRESETS.casual;
+// Hotspot sea creatures (wiki: Sea Creatures/List/Hotspot): name, Fishing level, weight, lava?
+function mwHotspots(t){
+  const out = []; let lava = false;
+  for (const r of String(t || "").split(/\n\|-/).slice(1)){
+    if (/Liquid:\s*\{\{Item\|Lava\}\}/i.test(r)) lava = true; else if (/Liquid:\s*\{\{Item\|Water\}\}/i.test(r)) lava = false;
+    const n = r.match(/\[\[([^\]|]+)\]\]\s*\(\{\{(\w+)\}\}\)/); if (!n) continue;
+    const cells = r.split("\n").filter(l => /^\|/.test(l)).map(l => l.slice(1).trim());
+    const nums = cells.filter(c => /^[\d,]+$/.test(c)).map(c => +c.replace(/,/g, ""));
+    if (nums.length >= 2) out.push({name:n[1].trim(), lvl:nums[0], w:nums[1], lava});
+  }
+  return out;
+}
+// Crystal Nucleus loot (wiki): item, amount, weight; plus the total weight
+function mwNucleus(t){
+  const rows = []; const i = String(t || "").indexOf("Crystal Nucleus Drop Chances"); if (i < 0) return {rows, total:0};
+  const tb = t.slice(i).split(/\n\|\}/)[0];
+  for (const r of tb.split(/\n\|-/).slice(1)){
+    const it = r.match(/\{\{Item\|([^|}]+)(?:\|amount=([\d,]+))?[^}]*\}\}/), w = r.match(/\{\{aqua\|([\d,]+)\}\}/i), ench = r.match(/EnchantmentLink\|([^}]+)\}\}/);
+    if (!it || !w || / Crystal$/.test(it[1].trim())) continue;   // Gemstone Crystals can't be traded (they forge Perfect Gemstones)
+    rows.push({item:ench ? `Enchanted Book (${ench[1].trim()})` : it[1].trim(), qty:+(it[2] || "1").replace(/,/g, ""), w:+w[1].replace(/,/g, "")});
+  }
+  return {rows, total:rows.reduce((a, r) => a + r.w, 0)};
+}
+// shard hunting, Hotspot fishing, Nucleus runs, Sludge mining and Rift money
+function mwMethods3(st, D2, P, S, shards){
+  const M = [], PR = mwPre(S), sell = id => mwSell(id, P, S), drops = list => mwDrops(list, P, S);
+  const islOk = isl => { const I = ISLANDS.find(i => i.id === isl); return I ? !islandReq(st, I).locked : true; };
+  const islName = isl => ISLANDS.find(i => i.id === isl)?.name || isl;
+  const rate = (key, def) => { const v = +S[key]; return v > 0 ? v : def; };
+  // shard hunting: SkyShards' typical shards per hour (before Hunting Fortune), times your Hunting Fortune
+  const hf = +S.hf || 0;
+  for (const s of shards?.list || []){
+    if (!(s.rate > 0) || s.fusionOnly || !s.bz) continue;
+    const v = sell(s.bz); if (!v.v) continue;
+    const key = `hunt:${s.id}`, def = Math.round(s.rate * PR.hunt), base = mwTime(key, def), where = (s.where || []).filter(w => w.method !== "Fusion")[0];
+    M.push({key, cat:"hunt", icon:"🏹", name:`${s.name} shard`, ok:true, why:"", unit:"shard", perH:base * (1 + hf / 100), gross:v.v, cost:0,
+      drops:[{item:`${s.name} Shard`, id:s.bz, p:1, qty:1, unit:v.v, src:v.src, known:true, ev:v.v}], costs:[],
+      time:{key, def, val:base, label:"shards per hour before Hunting Fortune"},
+      notes:[`Typical rate from SkyShards (${fmt(s.rate)}/hour), scaled by your speed preset, × (1 + ${hf} Hunting Fortune / 100).`, where ? `How: ${where.method}${where.place ? " in " + where.place : ""}.` : "", "Attributes that add shards (like Tiamat or King Cobra) aren't counted."].filter(Boolean)});
+  }
+  // Hotspot fishing: a share of sea creatures become Hotspot creatures (15% base, up to 85% with tonic, hook, bait and a Mythic Hermit Crab)
+  const fishLvl = st.skills?.find(s => s.id === "FISHING")?.level || 0, scph = rate("scph", PR.scph), hotShare = Math.min(85, rate("hotspot", PR.hotspot)) / 100;
+  const mobEv = name => { const mob = D2.mobs[name]; if (!mob) return null; const d = drops(mwMobDrops(mob).map(r => r.p < 0.05 ? {...r, p:Math.min(1, r.p * (1 + (+S.mf || 0) / 100))} : r)); return {coins:mob.coins, ev:mob.coins + d.reduce((a, x) => a + x.ev, 0)}; };
+  for (const [isl, title, lava] of [["hub", "Hotspot fishing: Hub water", false], ["bayou", "Hotspot fishing: Backwater Bayou", false], ["lotus", "Hotspot fishing: Lotus Atoll", false], ["crimson", "Hotspot fishing: Crimson Isle lava", true]]){
+    const reg = (MAP_EXTRA[isl]?.sea || []).map(([n, , lvl, ch]) => ({n, lvl, w:parseFloat(ch) || 0})).filter(s => s.w > 0 && s.lvl <= Math.max(fishLvl, 1) && D2.mobs[s.n]);
+    const hot = (D2.hotspot || []).filter(h => h.lava === lava && h.lvl <= Math.max(fishLvl, 1) && D2.mobs[h.name]).map(h => ({n:h.name, w:h.w}));
+    if (!reg.length || !hot.length) continue;
+    const pool = (list, share) => { const tot = list.reduce((a, s) => a + s.w, 0); return list.map(s => { const v = mobEv(s.n); return {item:`${s.n} (${(share * s.w / tot * 100).toFixed(1)}% of catches)`, id:null, p:share * s.w / tot, qty:1, unit:v.ev, src:`${fmt(v.coins)} coins + drops`, known:true, ev:share * s.w / tot * v.ev}; }); };
+    const dl = [...pool(hot, hotShare), ...pool(reg, 1 - hotShare)].sort((a, b) => b.ev - a.ev), ok = islOk(isl);
+    M.push({key:`fish:hot:${isl}`, cat:"fish", icon:"🔥", name:title, ok, why:ok ? "" : `${islName(isl)} is locked`, unit:"sea creature", perH:scph, gross:dl.reduce((a, d) => a + d.ev, 0), cost:0, drops:dl, costs:[],
+      time:{key:"hotspot", def:PR.hotspot, val:Math.round(hotShare * 100), label:"% of sea creatures that are Hotspot creatures (15 base, 85 max)", global:true},
+      notes:[`${Math.round(hotShare * 100)}% Hotspot creatures, the rest from the normal pool (wiki). Sea creatures per hour: ${fmt(scph)} (change it on any fishing method).`, "Hotspots also give +15 Fishing Speed, +5 Sea Creature Chance or +2 Double Hook, which you'd add to your rate."]});
+  }
+  // Crystal Nucleus runs
+  if (D2.nucleus?.total){
+    const rolls = 16.5, N = D2.nucleus, key = "nucleus", min = mwTime(key, PR.nucleus), ok = islOk("crystal");
+    const dl = drops([...N.rows.map(r => ({item:r.item, qty:r.qty, p:Math.min(1, rolls * r.w / N.total)})), ...["Ruby", "Amber", "Sapphire", "Jade", "Amethyst", "Topaz", "Jasper"].map(g => ({item:`Fine ${g} Gemstone`, qty:1, p:1}))]);
+    const ids = n => mwId(n, P), part = ["Electron Transmitter", "FTX 3070", "Robotron Reflector", "Superlite Motor", "Control Switch", "Synthetic Heart"].reduce((a, n) => a + mwBuy(ids(n), P, S), 0);
+    const app = mwBuy(ids("Precursor Apparatus"), P, S), sapph = app && part ? Math.min(app, part) : app || part;
+    const costs = [["Jungle Key", mwBuy(ids("Jungle Key"), P, S)], ["Goblin Egg", mwBuy(ids("Goblin Egg"), P, S)], [app && app <= part ? "Precursor Apparatus" : "6 Automaton parts", sapph]];
+    M.push({key, cat:"mine", icon:"🔷", name:"Crystal Nucleus runs", ok, why:ok ? "" : "Crystal Hollows are locked", unit:"run", perH:60 / min, gross:dl.reduce((a, d) => a + d.ev, 0), cost:costs.reduce((a, c) => a + c[1], 0), drops:dl, costs,
+      time:{key, def:PR.nucleus, val:min, label:"minutes per run (all five crystals)"},
+      notes:["14–19 rolls per bundle (16.5 on average) from the wiki's weighted loot table, plus one of each Fine Crystal Hollows gemstone.", "Mole pet, High Roller and Bigger Box add rolls; the Nucleus RNG meter isn't counted. Divan's Alloy is a rare jackpot that makes up much of the average. Ruby and Jasper Crystals also drop, but they can't be traded, so they aren't counted."]});
+  }
+  // Sludge mining: 3% Sludge Juice per Hard Stone mined in the Jungle with a Jungle Pickaxe
+  { const key = "sludge", bph = mwTime(key, PR.sludge), ok = islOk("crystal"), j = sell(mwId("Sludge Juice", P)), h = sell("HARD_STONE"), eh = sell("ENCHANTED_HARD_STONE");
+    const hsUnit = Math.max(h.v, eh.v / 160), mf = 1 + (+S.mfort || 0) / 100;
+    const dl = [{item:"Sludge Juice", id:"SLUDGE_JUICE", p:0.03, qty:1, unit:j.v, src:j.src, known:!!j.v, ev:0.03 * j.v}, {item:"Hard Stone", id:"HARD_STONE", p:1, qty:mf, unit:hsUnit, src:hsUnit === h.v ? h.src : `${eh.src}, as Enchanted (160 each)`, known:!!hsUnit, ev:mf * hsUnit}];
+    M.push({key, cat:"mine", icon:"🟢", name:"Sludge mining (Jungle)", ok, why:ok ? "" : "Crystal Hollows are locked", unit:"block", perH:bph, gross:dl.reduce((a, d) => a + d.ev, 0), cost:0, drops:dl, costs:[],
+      time:{key, def:PR.sludge, val:bph, label:"Hard Stone blocks mined per hour"}, notes:["Wiki: 3% chance for Sludge Juice per Hard Stone mined in the Jungle with a Jungle Pickaxe. Treasure chests and Sludge mobs add more."]}); }
+  // Rift: crafts made from what you collect, and what a mote is worth
+  for (const [item, label] of [["Polarvoid Book", "Polarvoid Book (Rift craft)"], ["Exportable Carrots", "Exportable Carrots (Rift craft)"]]){
+    const id = mwId(item, P), v = sell(id); if (!v.v) continue;
+    const key = `rift:${id}`, cph = mwTime(key, PR.rift), ok = islOk("rift"), rec = NEU[id]?.recipes?.find(r => r.type === "craft");
+    M.push({key, cat:"rift", icon:"🌀", name:label, ok, why:ok ? "" : "The Rift is locked", unit:"craft", perH:cph, gross:v.v, cost:0,
+      drops:[{item, id, p:1, qty:1, unit:v.v, src:v.src, known:true, ev:v.v}], costs:[], time:{key, def:PR.rift, val:cph, label:"crafted per hour from Rift materials you collect"},
+      notes:[rec ? `Recipe: ${rec.inputs.map(([i, n]) => `${fmt(n)} ${mwName(i)}`).join(", ")}${rec.out > 1 ? ` (makes ${rec.out})` : ""}.` : "Made from materials collected in the Rift.", "Ingredients are collected in the Rift, so they're not counted as a cost."]});
+  }
+  if (MW.motes?.length){
+    const best = MW.motes[0], key = "motes", mph = mwTime(key, PR.motes), ok = islOk("rift");
+    M.push({key, cat:"rift", icon:"🌀", name:`Motes → ${best.name}`, ok, why:ok ? "" : "The Rift is locked", unit:"mote", perH:mph, gross:best.perMote, cost:0,
+      drops:MW.motes.slice(0, 8).map((m, k) => ({item:`${m.name} (${fmt(m.motes)} motes from ${m.npc})`, id:m.id, p:k ? 0 : 1, qty:1, unit:m.perMote, src:`${fmt(m.sell)} each`, known:true, ev:k ? 0 : m.perMote})), costs:[],
+      time:{key, def:PR.motes, val:mph, label:"motes earned per hour"}, notes:["Coins per mote = what the item sells for outside the Rift ÷ its price in motes. The list shows the next best items too."]});
+  }
+  for (const m of M){ m.net = m.gross - m.cost; m.hour = m.net * m.perH; m.unknown = m.drops.filter(d => !d.known && d.p >= 0.001); }
+  return M;
+}
+// Rift shop items bought with motes, by coins per mote (from the NEU NPC shops)
+async function mwLoadMotes(P, S){
+  const idx = await loadNpcIndex(), out = [];
+  for (const [id, offers] of Object.entries(idx)) for (const o of offers){
+    const m = o.inputs.find(([i]) => /^(SKYBLOCK_)?MOTES?$/i.test(i)); if (!m || o.inputs.length > 1 || o.coins) continue;
+    const s = mwSell(id, P, S); if (!s.v) continue;
+    out.push({id, name:mwName(id), npc:o.npc, motes:m[1] / (o.out || 1), sell:s.v, perMote:s.v / (m[1] / (o.out || 1))});
+  }
+  return out.sort((a, b) => b.perMote - a.perMote);
+}
+// "slow to sell": you'd make more of an item per hour than half of what the Bazaar (or the AH, from recent sales) trades in an hour.
+// Coins/hour then only counts what the market can take (half its hourly trading); the full paper value is kept as hourRaw.
+function mwFlagSlow(m, P, S){
+  m.slow = []; m.hourRaw = m.hour;
+  if (!(m.perH > 0) || !(m.gross > 0) || m.hour == null) return;
+  let lost = 0;
+  for (const d of m.drops){
+    if (!d.id || d.ev / m.gross < 0.15) continue;
+    const b = P.bz[d.id], ahVol = !b && P.medVol?.[d.id]; if (!b && !ahVol) continue;
+    const made = m.perH * d.p * d.qty, mkt = b ? (S.mode === "offer" ? b.askVol : b.bidVol) / 168 : ahVol / 24;
+    if (made > mkt * 0.5){ m.slow.push({item:d.item, made, mkt}); lost += d.ev * (1 - mkt * 0.5 / made); }
+  }
+  if (lost > 0){ m.gross -= lost; m.net = m.gross - m.cost; m.hour = m.net * m.perH; }
+}
+
+// ---------- SkyCofl community data (free API; credited with links, as their terms ask) ----------
+// /api/tasks: coins/hour measured from what SkyCofl mod users actually collect, with requirements, where to go and step-by-step guides.
+// /api/craft/profit: craft flips across the AH and Bazaar, which we re-price with our own prices.
+const COFL = "https://sky.coflnet.com";
+async function mwLoadCofl(){
+  try { MW.tasks = await cachedJSON(COFL + "/api/tasks", 30 * 60e3); } catch (e) { console.warn("SkyCofl tasks", e); MW.tasks = MW.tasks || null; }
+  try { MW.cofCrafts = await cachedJSON(COFL + "/api/craft/profit", 15 * 60e3); } catch (e) { console.warn("SkyCofl crafts", e); MW.cofCrafts = MW.cofCrafts || null; }
+  if (tab === "money") render();
+}
+// one SkyCofl requirement → {ok:true|false|null, have}
+function mwReq(st, r){
+  const C = crimsonData(st), lv = id => st.skills?.find(s => s.id === String(id).toUpperCase())?.level;
+  switch (r.kind){
+    case "skill_level": { const v = lv(r.key); return {ok:v == null ? null : v >= r.target, have:v}; }
+    case "skyblock_level": return {ok:st.sbLevel == null ? null : st.sbLevel >= r.target, have:Math.floor(st.sbLevel || 0)};
+    case "catacombs_level": return {ok:st.cata ? st.cata.level >= r.target : null, have:st.cata?.level};
+    case "hotm_tier": return {ok:st.hotm == null ? null : st.hotm >= r.target, have:st.hotm};
+    case "hotf_tier": { let t = null; try { const x = hotfFromProfile(st.hotfSrc).xp; t = x == null ? null : HOTF_TIERS.filter(h => x >= h[0]).length; } catch {} return {ok:t == null ? null : t >= r.target, have:t}; }
+    case "slayer_tier": { const s = st.slayers?.find(x => x.id === r.key); return {ok:s ? (s.kills?.[r.target - 1] || 0) > 0 : null, have:s ? s.kills?.filter(k => k > 0).length : null}; }
+    case "slayer_level": { const s = st.slayers?.find(x => x.id === r.key); return {ok:s ? s.level >= r.target : null, have:s?.level}; }
+    case "dungeon_floor": { const f = (r.key === "master" ? st.mmFloors : st.floors) || {}; return {ok:(f[r.target] || 0) > 0, have:null}; }
+    case "kuudra_tier": { const k = KUUDRA_TIERS[r.target - 1]; return {ok:k ? (C.K?.[k[0]] || 0) > 0 : null, have:C.kBeat}; }
+    case "kuudra_reputation": return {ok:C.has ? C.rep >= r.target : null, have:C.rep};
+  }
+  return {ok:null};
+}
+function mwTaskStatus(st, t){
+  const R = (t.requirements || []).filter(r => r.hard !== false).map(r => ({...r, ...mwReq(st, r)}));
+  const miss = R.filter(r => r.ok === false);
+  return {R, ok:!miss.length, why:miss.map(r => r.label).join(", ")};
+}
+// which SkyCofl task matches one of our methods
+const MW_TASK_MAP = {"kuudra:0":"kuudra-t1", "kuudra:1":"kuudra-t2", "kuudra:2":"kuudra-t3", "kuudra:3":"kuudra-t4", "kuudra:4":"kuudra-t5",
+  "farm:WHEAT":"wheat-farming", "farm:CARROT_ITEM":"carrot-farming", "farm:POTATO_ITEM":"potato-farming", "farm:PUMPKIN":"pumpkin-farming", "farm:SUGAR_CANE":"sugar-cane-farming", "farm:MELON":"melon-farming",
+  "farm:CACTUS":"cactus-farming", "farm:INK_SACK:3":"cocoa-beans-farming", "farm:RED_MUSHROOM":"mushroom-farming", "farm:NETHER_STALK":"nether-wart-farming", "farm:DOUBLE_PLANT":"sunflower-farming",
+  "farm:MOONFLOWER":"moonflower-farming", "farm:WILD_ROSE":"wild-rose-farming", "mine:MITHRIL_ORE":"mithril-mining", "mine:UMBER":"umber-mining", "mine:TUNGSTEN":"tungsten-mining", "mine:GLACITE":"glacite-mining",
+  "sludge":"sludge-mining", "fish:hub":"water-fishing", "fish:crimson":"crimson-fishing", "fish:bayou":"bayou-fishing", "fish:lotus":"lotus-atoll", "fish:moonglade":"galatea-fishing", "fish:jerry":"winter-fishing",
+  "grind:Ghost":"ghost-the-mist", "diana":"diana", "log:FIG_LOG":"fig-foraging", "log:MANGROVE_LOG":"mangrove-foraging", "log:HELIX_LOG":"helix-foraging", "log:LOG":"oak-foraging", "log:LOG:2":"birch-foraging",
+  "log:LOG:1":"spruce-foraging", "log:LOG_2:1":"dark-oak-foraging", "log:LOG_2":"acacia-foraging", "log:LOG:3":"jungle-foraging", "slayer:enderman:4":"t4-voidglooms"};
+function mwTaskFor(m){
+  const T = MW.tasks; if (!Array.isArray(T)) return null;
+  const by = s => T.find(t => t.slug === s);
+  let slug = MW_TASK_MAP[m.key], all = false;
+  if (!slug){
+    let k;
+    if ((k = m.key.match(/^dungeon:([FM])(\d)$/))) slug = `${k[1].toLowerCase()}${k[2]}`;
+    else if ((k = m.key.match(/^mine:ROUGH_(\w+)_GEM$/))) slug = `${k[1].toLowerCase()}-mining`;
+    else if ((k = m.key.match(/^slayer:(\w+):/))) { slug = {blaze:"blaze-slayer", spider:"tarantula-slayer", wolf:"sven-slayer", zombie:"revenant-slayer"}[k[1]]; all = true; }
+    else if (m.cat === "pest") { slug = "pest"; all = true; }
+    else if (m.cat === "hunt"){ const n = m.name.replace(/ shard$/, "").toLowerCase(); const t = T.find(t => /\(hunting\)$/i.test(t.name) && t.name.replace(/\s*\(hunting\)$/i, "").toLowerCase() === n); return t ? {t, all:false} : null; }
+  }
+  const t = slug && by(slug);
+  return t ? {t, all} : null;
+}
+function mwTaskBox(m){
+  const x = mwTaskFor(m); if (!x) return "";
+  const t = x.t, measured = t.source !== "formula";
+  return `<h4>👥 What players really make</h4><div class="card"><div><b class="good">${fmt(t.coinsPerHour)}</b> coins/hour on average for <b>${esc(t.name)}</b>${x.all ? " (all tiers or kinds together)" : ""}</div>
+    <div class="small muted">${measured ? `Measured from ${fmt(t.communityTrackedHours)} hours tracked by ${t.contributors} SkyCofl mod users` : "Estimated by SkyCofl from drop rates (not enough tracked players yet)"}${t.bestZones?.[0] ? `; best spot: ${esc(t.bestZones[0].zone)} (${fmt(t.bestZones[0].coinsPerHour)}/hour)` : ""}.
+    Data: <a href="${COFL}/tasks" target="_blank" rel="noopener">SkyCofl</a>. Our estimate above uses your speed and stats; theirs is what players actually collected.</div></div>`;
+}
+// Community tab: every SkyCofl task, checked against your profile
+function mwCommunityHTML(st, S){
+  const T = MW.tasks;
+  if (!Array.isArray(T)) return `<div class="empty">Loading SkyCofl's community data…</div>`;
+  const rows = T.map(t => ({t, s:mwTaskStatus(st, t)})).filter(x => S.only === false || x.s.ok).sort((a, b) => b.t.coinsPerHour - a.t.coinsPerHour);
+  const kind = t => t.type === "limited" ? ' <span class="pill">daily limit</span>' : t.type === "passive" ? ' <span class="pill">passive</span>' : "";
+  return `<p class="muted small">Coins per hour that players actually make, measured by <a href="${COFL}/tasks" target="_blank" rel="noopener">SkyCofl</a> from what their mod users collect, priced at current prices. These are community averages: your own gear and speed change them. ${S.only === false ? "" : "Showing only what your profile meets the requirements for."} Click one for where to go and how to do it.</p>
+    <div class="card"><table data-limit="30"><thead><tr><th>Method</th><th class="mnum">Real coins / hour</th><th class="mnum">Playing now</th><th>Where</th></tr></thead><tbody>
+    ${rows.map(({t, s}) => `<tr class="clk" data-mtask="${esc(t.slug)}"${s.ok ? "" : ' style="opacity:.6"'}><td><b>${esc(t.name)}</b> <span class="small muted">${esc(t.category)}</span>${kind(t)}${s.ok ? "" : ` <span class="small muted">🔒 ${esc(s.why)}</span>`}${t.source === "formula" ? ' <span class="pill" title="Not enough tracked players: estimated from drop rates">estimate</span>' : ""}</td>
+      <td class="mnum"><b class="good">${fmt(t.coinsPerHour)}</b></td><td class="mnum small">${t.currentDoers}${t.doersChange20m ? ` <span class="muted">(${t.doersChange20m > 0 ? "+" : ""}${t.doersChange20m})</span>` : ""}</td><td class="small">${esc(t.where || t.island || "")}${t.warp ? ` <span class="mono muted">${esc(t.warp)}</span>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function mwOpenTask(slug){
+  const t = (MW.tasks || []).find(x => x.slug === slug); if (!t || !CUR) return;
+  const st = CUR.st, s = mwTaskStatus(st, t), S = mwSet();
+  const drops = (t.drops || []).map(d => { const v = mwSell(d.itemTag, MW.P || {bz:{}, bin:{}, npc:{}}, S); return {...d, our:v.v}; }).sort((a, b) => b.contributionPerHour - a.contributionPerHour);
+  openInfo(`👥 ${esc(t.name)}`, infoStats([["💰 Real coins / hour", fmt(t.coinsPerHour), t.source === "formula" ? "SkyCofl estimate" : `${fmt(t.communityTrackedHours)} hours tracked by ${t.contributors} players`], ["👤 Playing now", t.currentDoers, `${t.doersChange20m >= 0 ? "+" : ""}${t.doersChange20m} in 20 minutes`], ["📍 Where", esc(t.where || t.island || "—"), t.warp ? esc(t.warp) : ""]])
+    + `${t.description ? `<p>${esc(t.description)}</p>` : ""}
+    ${s.R.length ? `<h4>Requirements</h4><ul>${s.R.map(r => `<li>${r.ok === true ? "✅" : r.ok === false ? "🔒" : "❔"} ${esc(r.label)}${r.have != null && r.ok === false ? ` <span class="small muted">(you: ${esc(r.have)})</span>` : ""}</li>`).join("")}</ul>` : ""}
+    ${t.steps?.length ? `<h4>How to do it</h4><ol>${t.steps.map(x => `<li>${esc(x.text)}</li>`).join("")}</ol>` : ""}
+    ${t.bestZones?.length ? `<h4>Best spots</h4><div class="card"><table><tbody>${t.bestZones.map(z => `<tr><td>${esc(z.zone)}</td><td class="mnum">${fmt(z.coinsPerHour)}/hour</td><td class="mnum small muted">${z.players} players</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${drops.length ? `<h4>Most-collected items per hour</h4><div class="card"><table data-limit="10"><thead><tr><th>Item</th><th class="mnum">Per hour</th><th class="mnum">SkyCofl price</th><th class="mnum">Our price</th></tr></thead><tbody>
+      ${drops.map(d => `<tr><td><a href="${COFL}/item/${encodeURIComponent(d.itemTag)}" target="_blank" rel="noopener">${esc(d.itemName || d.itemTag)}</a></td><td class="mnum">${mwQty(d.ratePerHour)}</td><td class="mnum">${fmt(d.priceEach)}</td><td class="mnum">${d.our ? fmt(d.our) : "—"}</td></tr>`).join("")}</tbody></table></div>
+      <p class="small muted">SkyCofl only lists the 20 most-collected items, so rare valuable drops can be missing here even though they're in the coins/hour.</p>` : ""}
+    <p class="small muted">Data: <a href="${COFL}/tasks" target="_blank" rel="noopener">SkyCofl community tracking</a>${t.wikiUrl ? ` · <a href="${esc(t.wikiUrl)}" target="_blank" rel="noopener">wiki</a>` : ""}.</p>`);
+}
+// craft flips from SkyCofl's list, re-priced with our prices; collection requirement checked against your profile
+function mwCofCrafts(st, P, S, capital){
+  const L = MW.cofCrafts; if (!Array.isArray(L)) return null;
+  const coll = name => st.collections?.find(c => String(c.name).toLowerCase() === String(name).toLowerCase());
+  const out = [];
+  for (const c of L){
+    if (!c.itemId || !c.ingredients?.length) continue;
+    if (c.median && !P.bz[c.itemId]){ (P.med ||= {})[c.itemId] ||= c.median; (P.medVol ||= {})[c.itemId] ||= c.volume || 0; }
+    let cost = 0, theirs = false;
+    for (const g of c.ingredients){
+      const ours = mwBuy(g.itemId, P, S) * g.count, craft = g.type === "craft" && g.craftCost > 0 ? g.craftCost : Infinity;
+      if (ours > 0 && ours <= craft) cost += ours; else { cost += Math.min(craft, g.cost || Infinity); theirs = true; }
+    }
+    if (!isFinite(cost) || !cost) continue;
+    const sell = mwSell(c.itemId, P, S); if (!sell.v) continue;
+    const profit = sell.v - cost; if (profit <= 0) continue;
+    const r = c.reqCollection, have = r ? coll(r.name) : null;
+    // crafts a day: your share of how many sell a day, of each Bazaar ingredient's daily trading, and what your coins fund (one turnover a day)
+    const b = P.bz[c.itemId], vol = b ? ((S.mode === "offer" ? b.askVol : b.bidVol) || 0) / 7 : c.volume || 0;
+    const ingCap = c.ingredients.map(g => { const gb = P.bz[g.itemId]; return gb ? ((S.mode === "offer" ? gb.bidVol : gb.askVol) || 0) / 7 * S.share / 100 / g.count : Infinity; });
+    const crafts = Math.min(vol * S.share / 100, ...ingCap, capital > 0 ? capital / cost : Infinity);
+    out.push({id:c.itemId, name:(stripMc(c.itemName) || mwName(c.itemId)).trim(), cost, sell:sell.v, src:sell.src, profit, pct:profit / cost * 100, vol, crafts, day:profit * crafts,
+      req:r ? `${r.name} ${r.level}` : "", can:!r ? true : have ? have.tier >= r.level : null, theirs, ings:c.ingredients});
+  }
+  return out.filter(x => x.vol >= 1).sort((a, b) => b.day - a.day).slice(0, 60);
+}
+function mwCofCraftsHTML(st, S){
+  const L = mwCofCrafts(st, MW.P, S, (st.purse || 0) + (st.bank || 0));
+  if (!L) return `<h4>🔨 Craft flips (AH and Bazaar)</h4><div class="empty">Loading SkyCofl's craft list…</div>`;
+  return `<h4>🔨 Craft flips (AH and Bazaar)</h4><p class="muted small">Items from <a href="${COFL}/crafts" target="_blank" rel="noopener">SkyCofl's craft list</a>, re-priced with our prices: ingredients bought ${S.mode === "offer" ? "with buy orders" : "instantly"} (or SkyCofl's cost for a sub-craft when that's cheaper), sold for the best of Bazaar, AH (lowest BIN or median sale) or NPC. "Per day" assumes you take ${S.share}% of the daily trading of the item and of each Bazaar ingredient, and never spend more than your purse + bank in a day. 🔒 means your collection isn't high enough to craft it yet.</p>
+    ${L.length ? `<div class="card"><table data-limit="20"><thead><tr><th>Item</th><th class="mnum">Ingredients</th><th class="mnum">Sells for</th><th class="mnum">Profit each</th><th class="mnum">Sold / day</th><th class="mnum">Crafts / day</th><th class="mnum">Per day</th></tr></thead><tbody>
+    ${L.map(c => `<tr${c.can === false ? ' style="opacity:.6"' : ""}><td><a href="${COFL}/item/${encodeURIComponent(c.id)}" target="_blank" rel="noopener"><b>${esc(c.name)}</b></a>${c.can === false ? ` <span class="small muted">🔒 ${esc(c.req)}</span>` : c.req ? ` <span class="small muted">${c.can ? "✓" : ""} ${esc(c.req)}</span>` : ""}
+      <div class="small muted">${c.ings.map(g => `${fmt(g.count)} ${esc(mwName(g.itemId))}`).join(", ")}</div></td><td class="mnum">${fmt(c.cost)}${c.theirs ? ' <span class="small muted" title="Part of this uses SkyCofl\'s cost for crafting an ingredient">*</span>' : ""}</td>
+      <td class="mnum">${fmt(c.sell)} <span class="small muted">${esc(c.src || "")}</span></td><td class="mnum">${fmt(c.profit)} <span class="small muted">${c.pct.toFixed(0)}%</span></td><td class="mnum small">${fmt(c.vol)}</td><td class="mnum small">${c.crafts >= 10 ? fmt(c.crafts) : mwQty(c.crafts)}</td><td class="mnum"><b class="good">${fmt(c.day)}</b></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No craft is profitable at our prices right now.</div>`}`;
+}
+document.addEventListener("click", e => { const r = e.target.closest("[data-mtask]"); if (r) mwOpenTask(r.dataset.mtask); });
+
 // ---------- loading: wiki tables (cached a day) + live prices ----------
 const MW = {D:null, P:null, ratio:{}, loading:null, err:null, t:0, craft:null, craftBusy:false, open:null};
 function mwLoad(force){
@@ -2497,6 +2740,10 @@ function mwLoad(force){
       MW.D2 = mw2Parse(pages);
     }
     try { MW.mayor = (await cachedJSON(API + "/resources/skyblock/election", 15 * 60e3)).mayor || null; } catch { MW.mayor = null; }
+    try { MW.shards = await loadShards(); } catch { MW.shards = null; }
+    if (!MW.tasks || force) mwLoadCofl();
+    await Promise.all(["POLARVOID_BOOK", "EXPORTABLE_CARROTS"].map(id => fetchNeu(id).catch(() => null)));
+    if (!MW.motes) loadNpcIndex().then(() => mwLoadMotes(MW.P, mwSet())).then(r => { MW.motes = r; mwLoadMedians(); if (tab === "money") render(); }).catch(() => {});
     const npc = {}; for (const it of RES.items) if (it.npc_sell_price) npc[it.id] = it.npc_sell_price;
     MW.P = {bz:bz.m, bin:pr.bin || {}, npc, items:RES.items, med:MW.P?.med || {}};
     setTimeout(mwLoadMedians, 0);
@@ -2513,13 +2760,13 @@ function mwLoad(force){
 const mwChance = p => p >= 0.9999 ? "always" : p >= 0.01 ? (p * 100).toFixed(p >= 0.1 ? 0 : 1) + "%" : p > 0 ? "1 in " + fmt(Math.round(1 / p)) : "—";
 const mwQty = q => q >= 100 ? fmt(q) : (Math.round(q * 100) / 100).toLocaleString();
 function mwSpeed(m, S){
-  if (m.cat === "farm") return `${S.bps}/s`;
+  if (m.cat === "farm") return `${+S.bps || mwPre(S).bps}/s`;
   if (m.cat === "mine") return m.needMs ? "—" : `${fmt(m.perH)} blocks/h`;
   return /minute/.test(m.time.label) ? `${m.time.val} min` : `${fmt(m.perH)}/h`;
 }
 function mwRow(m, S){
   const h = m.hour, cls = h == null ? "muted" : h > 0 ? "good" : "bad";
-  return `<tr class="clk" data-mm="${esc(m.key)}"${m.ok ? "" : ' style="opacity:.6"'}><td>${m.icon} <b>${esc(m.name)}</b>${m.ok ? "" : ` <span class="small muted">🔒 ${esc(m.why)}</span>`}${m.unknown.length ? ` <span class="pill" title="Some drops have no price">${m.unknown.length} unpriced</span>` : ""}</td>
+  return `<tr class="clk" data-mm="${esc(m.key)}"${m.ok ? "" : ' style="opacity:.6"'}><td>${m.icon} <b>${esc(m.name)}</b>${m.ok ? "" : ` <span class="small muted">🔒 ${esc(m.why)}</span>`}${m.unknown.length ? ` <span class="pill" title="Some drops have no price">${m.unknown.length} unpriced</span>` : ""}${m.slow?.length ? ` <span class="pill warn" title="You'd make more than the Bazaar trades, so only what it can absorb is counted">slow to sell</span>` : ""}</td>
     <td class="mnum"><b class="${cls}">${h == null ? "enter Mining Speed" : fmt(h)}</b></td><td class="mnum">${fmt(m.net)} <span class="small muted">/ ${m.unit}</span></td><td class="mnum small muted">${mwSpeed(m, S)}</td></tr>`;
 }
 const mwTable = (list, S, limit) => list.length ? `<div class="card"><table${limit ? ` data-limit="${limit}"` : ""}><thead><tr><th>Method</th><th class="mnum">Coins / hour</th><th class="mnum">Profit each</th><th class="mnum">Your speed</th></tr></thead>
@@ -2529,17 +2776,19 @@ function mwSettings(st, S){
   const f = mwFarmFortune(st, "WHEAT"), num = (k, label, ph, extra = "") => `<label>${label}<input type="number" min="0" data-mset="${k}" value="${esc(S[k])}" placeholder="${esc(ph)}" ${extra}></label>`;
   const age = MW.t ? Math.round((Date.now() - MW.t) / 1000) : null;
   return `<div class="card mset">
+    <label>Speed preset<select data-mset="preset">${Object.entries(MW_PRESETS).map(([k, p]) => `<option value="${k}"${(S.preset || "casual") === k ? " selected" : ""}>${p.label}</option>`).join("")}</select></label>
     <label>Sell on the Bazaar with<select data-mset="mode"><option value="instant"${S.mode === "instant" ? " selected" : ""}>Instant sell</option><option value="offer"${S.mode === "offer" ? " selected" : ""}>Sell offers</option></select></label>
     ${num("mf", "Magic Find", "0")}
     ${num("ff", "Farming Fortune", `≈${f.total} (profile)`)}
-    ${num("bps", "Crops per second", "19", 'max="20" step="0.5"')}
+    ${num("bps", "Crops per second", String(mwPre(S).bps), 'max="20" step="0.5"')}
     ${num("ms", "Mining Speed", "from /stats")}
     ${num("mfort", "Mining Fortune", "0")}
     ${num("gfort", "Gemstone Fortune", "0")}
     ${num("pristine", "Pristine", "0", 'step="0.1"')}
     ${num("forf", "Foraging Fortune", "0")}
+    ${num("hf", "Hunting Fortune", "0")}
     <label class="chk"><input type="checkbox" data-mset="only"${S.only !== false ? " checked" : ""}> Only what I can do now</label>
-    <div class="small muted msrc">Prices: live Bazaar, NPC, and the AH's lowest BIN or median recent sale (Coflnet), whichever is lower${age != null ? `, ${age < 60 ? "just now" : Math.round(age / 60) + " min ago"}` : ""}${MW.medBusy ? " · checking recent AH sales…" : ""} · drop chances: Hypixel SkyBlock Wiki <button class="mini" data-mreload>↻ Refresh</button></div>
+    <div class="small muted msrc">Prices: live Bazaar, NPC, and the AH's lowest BIN or median recent sale, whichever is lower (<a href="https://sky.coflnet.com/data" target="_blank" rel="noopener">AH sales provided by SkyCofl</a>)${age != null ? `, ${age < 60 ? "just now" : Math.round(age / 60) + " min ago"}` : ""}${MW.medBusy ? " · checking recent AH sales…" : ""} · drop chances: Hypixel SkyBlock Wiki <button class="mini" data-mreload>↻ Refresh</button></div>
   </div>`;
 }
 function mwMinionsHTML(st, S){
@@ -2571,8 +2820,9 @@ function viewMoney(st){
       : `<div class="empty">Loading live prices and the wiki's drop tables…</div>`;
   }
   if (Date.now() - MW.t > 120e3 && !MW.loading) setTimeout(() => mwLoad(), 0);
-  const S = mwSet(), M = [...mwMethods(st, MW.D, MW.P, S), ...(MW.D2 ? mwMethods2(st, MW.D2, MW.P, S, MW.mayor) : [])], capital = (st.purse || 0) + (st.bank || 0);
+  const S = mwSet(), M = [...mwMethods(st, MW.D, MW.P, S), ...(MW.D2 ? mwMethods2(st, MW.D2, MW.P, S, MW.mayor) : []), ...(MW.D2 ? mwMethods3(st, MW.D2, MW.P, S, MW.shards) : [])], capital = (st.purse || 0) + (st.bank || 0);
   MW.last = M;
+  for (const m of M) mwFlagSlow(m, MW.P, S);
   const pick = c => mwSort(M.filter(m => m.cat === c));
   const best = mwSort(M.filter(m => (S.only === false || m.ok) && m.hour != null && m.hour > 0));
   const top = best[0];
@@ -2584,6 +2834,7 @@ function viewMoney(st){
     ${top ? `<div class="card mtop clk" data-mm="${esc(top.key)}"><div class="small muted">Best for you right now</div><div class="big">${top.icon} ${esc(top.name)}</div><div><b class="good">${fmt(top.hour)}</b> coins/hour · ${fmt(top.net)} per ${top.unit}</div></div>` : ""}
     ${subTabs("money", [
       {id:"best", label:"🏆 Best for you", count:best.length, html:intro + farmNote + mineNote + mwTable(best, S, 25)},
+      {id:"community", label:"👥 Community", count:Array.isArray(MW.tasks) ? MW.tasks.filter(t => S.only === false || mwTaskStatus(st, t).ok).length : null, html:mwCommunityHTML(st, S)},
       {id:"slayer", label:"🗡 Slayers", count:pick("slayer").length, html:mwTable(pick("slayer"), S)},
       {id:"farm", label:"🌾 Farming", count:pick("farm").length, html:farmNote + mwTable(pick("farm"), S)},
       {id:"mine", label:"⛏ Mining", count:pick("mine").length, html:mineNote + mwTable(pick("mine"), S)},
@@ -2594,6 +2845,8 @@ function viewMoney(st){
       {id:"diana", label:"🦅 Diana", count:pick("diana").length, html:mwTable(pick("diana"), S)},
       {id:"mob", label:"⚔ Mobs", count:pick("mob").length, html:mwTable(pick("mob"), S)},
       {id:"forage", label:"🪓 Foraging", count:pick("forage").length, html:mwTable(pick("forage"), S)},
+      {id:"hunt", label:"🏹 Hunting", count:pick("hunt").length, html:`<p class="muted small">Shards per hour are SkyShards' typical rates for each shard, scaled by your speed preset and Hunting Fortune. Click one to set your own rate.</p>` + mwTable(pick("hunt"), S, 30)},
+      {id:"rift", label:"🌀 Rift", count:pick("rift").length, html:mwTable(pick("rift"), S)},
       {id:"minion", label:"🤖 Minions", html:MW.D2 ? mwMinionsHTML(st, S) : ""},
       {id:"forge", label:"🔥 Forge", html:mwForgeHTML(st, S)},
       {id:"flips", label:"💱 Flips", count:flips.length, html:mwFlipsHTML(flips, S, capital)},
@@ -2609,7 +2862,8 @@ function mwFlipsHTML(flips, S, capital){
     : `<button class="mini" data-mcraft${MW.craftBusy ? " disabled" : ""}>${MW.craftBusy ? "Checking recipes…" : "🔎 Find craft flips"}</button> <span class="small muted">Checks the recipes of every enchanted and compacted Bazaar item (the first time takes a minute).</span>`;
   return `<h4>💱 Bazaar flips</h4><p class="muted small">Put a buy order at the top bid, then a sell offer at the lowest ask (${S.tax}% tax). Coins/hour assumes ${share}, never more than your purse + bank (${fmt(capital)}). Prices move; check the spread before you commit.</p>${bz}
     ${mwNpcHTML(S)}
-    <h4>🔨 Craft flips</h4><p class="muted small">Buy the ingredients (${S.mode === "offer" ? "buy orders" : "instant buy"}), craft, sell the result on the Bazaar. Coins/hour uses the same share of the result's and each ingredient's trading, and never more than your purse + bank.</p>${craft}`;
+    ${CUR ? mwCofCraftsHTML(CUR.st, S) : ""}
+    <h4>🔨 Bazaar enchanting crafts</h4><p class="muted small">Buy the ingredients (${S.mode === "offer" ? "buy orders" : "instant buy"}), craft, sell the result on the Bazaar. Coins/hour uses the same share of the result's and each ingredient's trading, and never more than your purse + bank.</p>${craft}`;
 }
 function mwDetail(m){
   const S = mwSet(), tIn = m.time;
@@ -2625,8 +2879,9 @@ function mwDetail(m){
   const fort = m.fortune ? `<h4>Farming Fortune</h4><p class="small">${m.fortune.manual ? `Using the <b>${fmt(m.fortune.used)}</b> you entered.` : `Estimated <b>${fmt(m.fortune.total)}</b> from your profile: ${m.fortune.parts.map(([l, v]) => `${esc(l)} ${v}`).join(", ")}. Gear, pets and accessories add more: enter your real total at the top of the Money tab.`}</p>` : "";
   return infoStats([["💰 Coins / hour", m.hour == null ? "—" : fmt(m.hour), m.hour == null ? "enter your Mining Speed" : `${fmt(m.perH)} ${m.unit}${m.unit === "boss" ? "es" : "s"} an hour`],
       [`🎁 Per ${m.unit}`, fmt(m.gross), "average value of what you get"], m.cost ? [`💸 Costs per ${m.unit}`, fmt(m.cost), ""] : null, [`✅ Profit per ${m.unit}`, fmt(m.net), ""]])
-    + `${m.ok ? "" : `<div class="msg">🔒 ${esc(m.why)}</div>`}<div class="mspeedrow">⏱ ${speed}</div>
+    + `${m.ok ? "" : `<div class="msg">🔒 ${esc(m.why)}</div>`}<div class="mspeedrow">⏱ ${speed}</div>${mwTaskBox(m)}
     <h4>${m.cat === "farm" || m.cat === "mine" ? "What you get" : "Drops"}</h4>${dropT}${chests}${costs}${fort}
+    ${m.slow?.length ? `<div class="msg">🐢 <b>Slow to sell:</b> ${m.slow.map(x => `${esc(x.item)}: you'd make ${fmt(x.made)}/hour, the market trades about ${fmt(x.mkt)}/hour`).join("; ")}. Coins/hour only counts what the market can take (half its hourly trading); at full value it would be ${fmt(m.hourRaw)}/hour.</div>` : ""}
     ${m.unknown.length ? `<p class="small muted">No price found for: ${m.unknown.map(d => esc(d.item)).join(", ")} (counted as 0).</p>` : ""}
     <ul class="small muted">${m.notes.map(n => `<li>${esc(n)}</li>`).join("")}<li>Selling with ${S.mode === "offer" ? "sell offers" : "instant sell"} (${S.tax}% Bazaar tax); AH prices are the lowest BIN or the median recent sale, whichever is lower, minus listing and claim fees.</li></ul>`;
 }
@@ -2651,7 +2906,8 @@ document.addEventListener("click", e => {
 document.addEventListener("change", e => {
   const s = e.target.closest("[data-mset]"), t = e.target.closest("[data-mtime]"); if (!s && !t) return;
   const S = store.get("money:set", {});
-  if (s){ const k = s.dataset.mset; S[k] = s.type === "checkbox" ? s.checked : s.value === "" ? "" : isNaN(+s.value) ? s.value : +s.value; if (k === "mode" || k === "share" || k === "tax") { MW.craft = null; MW.npc = null; } store.set("money:set", S); }
+  if (s){ const k = s.dataset.mset; S[k] = s.type === "checkbox" ? s.checked : s.value === "" ? "" : isNaN(+s.value) ? s.value : +s.value; if (k === "mode" || k === "share" || k === "tax") { MW.craft = null; MW.npc = null; MW.motes = null; }
+    if (k === "preset"){ for (const g of ["bps", "uptime", "scph", "pph", "bph", "cph", "lph", "hotspot"]) S[g] = ""; for (let i = localStorage.length - 1; i >= 0; i--){ const lk = localStorage.key(i); if (lk && lk.includes("money:t:")) localStorage.removeItem(lk); } } store.set("money:set", S); }
   if (t){ const v = +t.value; if (t.dataset.global) { S[t.dataset.mtime] = v > 0 ? v : MW_DEF[t.dataset.mtime]; store.set("money:set", S); } else store.set("money:t:" + t.dataset.mtime, v > 0 ? v : 0); }
   if (tab === "money") render();
   if (t && MW.open){ $("#modal").classList.remove("on"); mwOpen(MW.open); }
