@@ -3871,7 +3871,7 @@ function viewPets(st){
       ${statCard("Max level", D.pets.filter(p => p.level >= p.max).length, `of ${D.pets.length} pets`, null)}
       ${statCard("Active pet", active ? esc(petName(active.type)) : "—", active ? `${prettyKey(active.tier)} · level ${active.level}` : "", null)}
     </div>
-    ${subTabs("pets", [{id:"mine", label:"My pets", count:D.pets.length, html:mine}, {id:"score", label:"Pet Score", html:score}, {id:"missing", label:"Missing pets", count:D.missing.length, html:miss}, {id:"shards", label:"🔮 Pet shards", html:`<div data-shard-ctx="pets" data-title="Shards that help pets" data-open="1"></div>`}, {id:"flips", label:"💰 Levelling flips", html:needMarket() ? petFlipsHTML(st) : '<div class="muted">Loading prices…</div>'}])}`;
+    ${subTabs("pets", [{id:"mine", label:"My pets", count:D.pets.length, html:mine}, {id:"score", label:"Pet Score", html:score}, {id:"missing", label:"Missing pets", count:D.missing.length, html:miss}, {id:"shards", label:"🔮 Pet shards", html:`<div data-shard-ctx="pets" data-title="Shards that help pets" data-open="1"></div>`}, {id:"sell", label:"🏷 Sell max pets", count:D.pets.filter(p => p.level >= p.max && PET_POINTS[p.tier]).length, html:needMarket() ? petSellHTML(st) : '<div class="muted">Loading prices…</div>'}, {id:"flips", label:"💰 Levelling flips", html:needMarket() ? petFlipsHTML(st) : '<div class="muted">Loading prices…</div>'}])}`;
 }
 
 // ---------- Heart of the Mountain (shown in Skills → Mining) ----------
@@ -4175,6 +4175,82 @@ function farmingMoneyHTML(){
     ${rows.map(x => `<tr><td>${ilink(x.raw)}</td><td class="small">${x.npc ? x.npc.toFixed(1) : "—"}</td><td class="small">${x.r ? x.r.toFixed(1) : "—"}</td><td class="small">${x.e ? x.e.toFixed(1) : "—"}</td><td><b>${fmt(x.best * 1000)}</b><div class="muted small">${esc(x.how)}</div></td></tr>`).join("")}
     </tbody></table></div>
     <p class="muted small">Coins per crop item after Bazaar tax. Crops drop different amounts per block (melons and cocoa drop several), so multiply by what you actually harvest per hour. Other farming money: Garden visitor offers, pest drops, and selling Jacob's contest rewards.</p>`;
+}
+// ---------- what to list your max-level pets for ----------
+// Recent sales come from SkyCofl (sky.coflnet.com), filtered to the same rarity, max level and (for pets without candy) no candy.
+const PETSELL = {};   // url -> {median, volume, min} | 0 (no sales) | undefined (loading)
+const petMaxLv = p => p.max;   // 100, or 200 for the Golden/Jade/Rose Dragon
+const petSellUrl = p => `https://sky.coflnet.com/api/item/price/PET_${p.type}?Rarity=${p.tier}&PetLevel=${petMaxLv(p)}${p.candyUsed ? "" : "&Candy=0"}`;
+let petSellBusy = false;
+async function loadPetSales(pets){
+  const todo = pets.map(petSellUrl).filter(u => !(u in PETSELL));
+  if (!todo.length || petSellBusy) return;
+  petSellBusy = true;
+  await pool([...new Set(todo)], 4, async u => {
+    try { const j = await cachedJSON(u, 6 * 3600e3); PETSELL[u] = j?.volume > 0 && j.median > 0 ? {median:j.median, volume:+j.volume, min:j.min} : 0; }
+    catch { PETSELL[u] = 0; }
+  });
+  petSellBusy = false;
+  if (tab === "pets") render();
+}
+// Hypixel AH fees: listing fee 1% under 10M, 2% under 100M, 2.5% from 100M, plus 1% taken when you claim coins over 1M
+const ahNet = x => x - x * (x < 10e6 ? 0.01 : x < 100e6 ? 0.02 : 0.025) - (x > 1e6 ? x * 0.01 : 0);
+// a price just under another listing, kept to round numbers (45,000,000 -> 44,900,000)
+function undercut(x){
+  const step = Math.pow(10, Math.max(0, Math.floor(Math.log10(x)) - 2));
+  const r = Math.floor(x / step) * step;
+  return r < x ? r : r - step;
+}
+const roundNice = x => { const step = Math.pow(10, Math.max(0, Math.floor(Math.log10(x)) - 2)); return Math.round(x / step) * step; };
+// one row per max-level pet: cheapest listing, recent sales and the suggested prices
+function petSellRows(st){
+  const D = petData(st);
+  return D.pets.filter(p => p.level >= p.max && PET_POINTS[p.tier]).map(p => {
+    const lb = PRICES?.bin?.[`PET-${p.type}-${p.tier}-${petMaxLv(p)}`] || null, url = petSellUrl(p), s = PETSELL[url];
+    const med = s ? s.median : null, vol = s ? s.volume : 0;
+    let quick = null, patient = null, why = "";
+    if (lb && med){
+      if (lb > med * 1.15){ quick = undercut(roundNice(med)); patient = undercut(lb); why = "the cheapest listing is well above what it actually sells for"; }
+      else if (lb < med * 0.8){ quick = undercut(lb); patient = roundNice(med); why = "someone is listing far below recent sales"; }
+      else { quick = undercut(lb); patient = Math.max(quick, roundNice(med)); why = "just under the cheapest listing"; }
+    } else if (lb){ quick = undercut(lb); why = "no recent sales found, so this only goes by the cheapest listing"; }
+    else if (med){ quick = undercut(roundNice(med)); why = "nobody has one listed right now"; }
+    // what selling does to your Pet Score
+    let scoreLoss = 0;
+    if (D.best[p.type] === p){
+      const next = D.pets.filter(o => o !== p && o.type === p.type && PET_POINTS[o.tier]).sort((a, b) => PET_POINTS[b.tier] - PET_POINTS[a.tier] || b.level - a.level)[0];
+      scoreLoss = PET_POINTS[p.tier] + 1 - (next ? PET_POINTS[next.tier] + (next.level >= next.max ? 1 : 0) : 0);
+    }
+    const item = p.heldItem && p.heldItem !== "PET_ITEM_TIER_BOOST" ? p.heldItem : null;
+    const itemVal = item ? (mkt(item)?.sell || PRICES?.bin?.[item] || 0) : 0;
+    return {p, lb, med, vol, loading:s === undefined, quick, patient, why, scoreLoss, item, itemVal, url};
+  }).sort((a, b) => (b.quick || 0) - (a.quick || 0));
+}
+const coinsExact = n => n == null ? "—" : Math.round(n).toLocaleString("en-US");
+function petSellHTML(st){
+  const rows = petSellRows(st);
+  if (!rows.length) return `<p class="muted">None of your pets are max level yet. Pets show up here once they hit level 100 (200 for the Golden, Jade and Rose Dragon).</p>`;
+  loadPetSales(rows.map(r => r.p));
+  const tierPill = t => `<span style="color:${PET_COLOR[t] || "inherit"};font-weight:600">${esc(prettyKey(t))}</span>`;
+  const total = rows.reduce((a, r) => a + (r.quick ? ahNet(r.quick) : 0), 0);
+  return `<p class="muted small">Every max-level pet you own, with what to list it for as a BIN. <b>Quick sale</b> should sell within a day or so; <b>Patient</b> waits for a buyer at the usual price. "You get" is after the auction fees. Sold together at quick-sale prices: about <b>${fmt(total)}</b>.</p>
+    <div class="card"><table data-limit="20"><thead><tr><th>Pet</th><th>Cheapest listed</th><th>Sells for</th><th>Quick sale</th><th>Patient</th><th>Before you sell</th></tr></thead><tbody>
+    ${rows.map(r => { const notes = [];
+      if (r.item && r.itemVal >= 500e3) notes.push(`🎁 Take off ${ilink(r.item)} first and sell it alone (${fmt(r.itemVal)}). Buyers rarely pay extra for it.`);
+      else if (r.item) notes.push(`🎁 Holds ${ilink(r.item)} (cheap, fine to leave on)`);
+      if (r.p.heldItem === "PET_ITEM_TIER_BOOST") notes.push("⬆ Has a Tier Boost, so it sells as this rarity. Leave it on.");
+      if (r.p.candyUsed) notes.push(`🍬 ${r.p.candyUsed} candy used, which buyers pay less for. Prices here are for candied copies.`);
+      if (r.p.active) notes.push("⭐ It's your active pet.");
+      if (r.scoreLoss > 0) notes.push(`📉 −${r.scoreLoss} Pet Score`);
+      if (r.vol && r.vol < 1) notes.push("🐢 Sells less than once a day, so expect to wait.");
+      return `<tr><td>${tierPill(r.p.tier)} <b>${esc(petName(r.p.type))}</b><div class="muted small">level ${r.p.level} · <a href="https://sky.coflnet.com/item/PET_${encodeURIComponent(r.p.type)}" target="_blank" rel="noopener">sales on SkyCofl ↗</a></div></td>
+        <td>${r.lb ? fmt(r.lb) : '<span class="muted">none</span>'}</td>
+        <td>${r.loading ? '<span class="muted small">loading…</span>' : r.med ? `${fmt(r.med)}<div class="muted small">${r.vol >= 1 ? `~${Math.round(r.vol)} sold a day` : "rarely sold"}</div>` : '<span class="muted">no sales</span>'}</td>
+        <td>${r.quick ? `<b>${coinsExact(r.quick)}</b><div class="muted small">you get ${fmt(ahNet(r.quick))}</div>` : "—"}</td>
+        <td>${r.patient && r.patient > r.quick ? `${coinsExact(r.patient)}<div class="muted small">you get ${fmt(ahNet(r.patient))}</div>` : '<span class="muted">same</span>'}</td>
+        <td class="small">${r.why ? `<div class="muted">${esc(r.why)}</div>` : ""}${notes.map(n => `<div>${n}</div>`).join("")}</td></tr>`; }).join("")}
+    </tbody></table></div>
+    <p class="muted small">Cheapest listing is the lowest BIN at the same rarity and max level. Sales are the median price over SkyCofl's recent sales for the same rarity and level, without candy unless yours has some (data by <a href="https://sky.coflnet.com/data" target="_blank" rel="noopener">SkyCofl</a>, refreshed every 6 hours). Skins aren't counted: a skinned pet is worth more, so check its own listings.</p>`;
 }
 // Taming / Pets: buy a low-level pet, level it to 100, sell it
 function petFlipsHTML(st){
@@ -6087,6 +6163,7 @@ function openPet(key){
       ${p.active ? '<li><span class="mtag">⭐</span><span>Your active pet</span></li>' : ""}
       ${others.length ? `<li><span class="mtag">📋</span><span>You also own: ${others.map(o => `${esc(prettyKey(o.tier))} lv ${o.level}`).join(", ")}</span></li>` : ""}</ul>
     ${prices.some(x => x[1]) ? `<h4>Lowest BIN by rarity</h4><div class="mzones">${prices.map(([t, pr]) => `<span><b style="color:${PET_COLOR[t] || "inherit"}">${esc(prettyKey(t))}</b> ${pr ? fmt(pr) : "—"}</span>`).join("")}</div>` : '<p class="muted small">Prices load with the Pets tab.</p>'}
+    ${p.level >= p.max ? (() => { const r = petSellRows(st).find(x => x.p === p) || petSellRows(st).find(x => x.p.type === p.type && x.p.tier === p.tier && x.p.exp === p.exp); return r && r.quick ? `<h4>🏷 Selling it</h4><p>List it for <b>${coinsExact(r.quick)}</b> to sell quickly${r.patient > r.quick ? `, or <b>${coinsExact(r.patient)}</b> if you can wait` : ""}. <span class="muted small">(${esc(r.why)}. More in Pets → Sell max pets.)</span></p>` : ""; })() : ""}
     <p class="small"><a href="https://hypixelskyblock.minecraft.wiki/w/${encodeURIComponent(petName(type).replace(/ /g, "_"))}_Pet" target="_blank" rel="noopener">Open on the wiki ↗</a></p>`);
 }
 // a bestiary family / mob
