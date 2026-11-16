@@ -3316,6 +3316,43 @@ function budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy){
   const sellTotal = best.runs * q * p.sell * (1 - 0.0125);
   return {...best, q, why, revenue:sellTotal, profit:sellTotal - (best.runs ? best.cost : 0), first:counts(1).cost};
 }
+// How fast a shard sells with a sell offer: sell offers are filled by people instant-buying, so it's the weekly instant-buy volume.
+// Whether today's lowest listing is real: compared with the median instant-buy price over the past week (Bazaar history from SkyCofl).
+// Without history, a slow seller with a wide gap to the buy orders is the warning sign.
+const SELL_SHARE = 0.25;   // the part of a market one seller can expect to get (same as the plans use)
+const SHARD_HIST = {};     // shard id -> {med, lo} | 0 (no history) ; missing = not loaded yet
+let shardHistBusy = false, shardHistDone = null;
+async function loadShardHist(S, ids, done){
+  shardHistDone = done;
+  const todo = [...new Set(ids)].filter(id => !(id in SHARD_HIST) && S.by[id]?.bz);
+  if (!todo.length || shardHistBusy) return;
+  shardHistBusy = true;
+  await pool(todo, 4, async id => {
+    try {
+      const j = await cachedJSON(`https://sky.coflnet.com/api/bazaar/${encodeURIComponent(S.by[id].bz)}/history/week`, 3600e3);
+      const b = (Array.isArray(j) ? j : []).map(x => x?.buy).filter(x => x > 0).sort((a, c) => a - c);
+      SHARD_HIST[id] = b.length >= 10 ? {med:b[b.length >> 1], lo:b[Math.floor(b.length * 0.1)]} : 0;
+    } catch { SHARD_HIST[id] = 0; }
+  });
+  shardHistBusy = false;
+  shardHistDone?.();
+}
+function shardSellRate(bz, S, id, qty){
+  const m = bz.m[S.by[id]?.bz]; if (!m) return null;
+  const perHr = (m.askVol || 0) / 168, gap = m.bid ? m.ask / m.bid : Infinity, h = SHARD_HIST[id];
+  const slow = perHr < 10;
+  const high = h ? m.ask > h.med * 1.25 : (slow && gap > 1.3);
+  const real = h ? (high ? h.med : m.ask) : (high ? m.bid : m.ask);   // what it realistically sells for
+  const hours = qty ? qty / Math.max(1e-9, perHr * SELL_SHARE) : 0;
+  return {perHr, ask:m.ask, bid:m.bid, gap, slow, high, real, hist:h, loading:h === undefined, hours,
+    rateTxt:perHr >= 1 ? `~${fmt(perHr)} sold/hour` : perHr * 24 >= 1 ? `~${fmt(perHr * 24)} sold/day` : `~${fmt(perHr * 168)} sold/week`};
+}
+const sellWhy = r => r.hist ? `Listed at ${fmt(r.ask)}, but over the past week it usually sold for ~${fmt(r.hist.med)} (Bazaar history from SkyCofl). Prices that jump like this tend to fall back.`
+  : `Few people buy at ${fmt(r.ask)} and buy orders only pay ${r.bid ? fmt(r.bid) : "nothing"}, so the listed price isn't what it really sells for.`;
+function sellRateHTML(bz, S, id, qty, priced){
+  const r = shardSellRate(bz, S, id, qty); if (!r) return "";
+  return `<div class="small ${r.slow || r.high ? "" : "muted"}">${r.slow ? "🐢 " : "⏱ "}${r.rateTxt}${r.high ? (priced ? ` <span class="muted" title="${esc(sellWhy(r))}">· listing looks too high, so priced at the past week's ~${fmt(r.real)}</span>` : ` <span style="color:var(--warn)" title="${esc(sellWhy(r))}">⚠ listed price likely too high, ~${fmt(r.real)} is realistic</span>`) : ""}</div>`;
+}
 function budgetHTML(S, bz, p, kind, budget, maxRuns, instantBuy, speed){
   const N = id => shardName(S.by[id]);
   const B = budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy);
@@ -3329,9 +3366,14 @@ function budgetHTML(S, bz, p, kind, budget, maxRuns, instantBuy, speed){
       ${Object.entries(B.farm).map(([id, n]) => `<li>🏹 Farm <b>${n.toLocaleString("en-US")}×</b> ${N(id)} <span class="muted">(~${dur(3600 * n / Math.max(1e-9, (S.by[id].rate || 0) * speed))})</span></li>`).join("")}
       ${fuses.map(([id, f]) => `<li>⚗ Fuse <b>${f.runs.toLocaleString("en-US")}×</b> ${f.fa}× ${N(f.a)} + ${f.fb}× ${N(f.b)} → ${(f.runs * f.q).toLocaleString("en-US")}× ${N(id)}</li>`).join("")}
       <li>⚗ Fuse <b>${B.runs.toLocaleString("en-US")}×</b> ${p.fa}× ${N(p.a)} + ${p.fb}× ${N(p.b)} → ${(B.runs * B.q).toLocaleString("en-US")}× ${N(p.out)}</li>
-      <li>🏷 Sell offer <b>${(B.runs * B.q).toLocaleString("en-US")}×</b> ${N(p.out)} @ ${fmt(p.sell)}</li>
+      <li>🏷 Sell offer <b>${(B.runs * B.q).toLocaleString("en-US")}×</b> ${N(p.out)} @ ${fmt(p.sell)}${p.listed ? ` <span class="muted">(listed ${fmt(p.listed)} now)</span>` : ""}</li>
     </ol>
-    <div class="small">Spend <b>${fmt(B.cost)}</b>${farmH ? ` + ~${dur(3600 * farmH)} farming` : ""} → get back <b>${fmt(B.revenue)}</b> after tax = <b class="good">+${fmt(B.profit)}</b>${B.thin ? ' <span style="color:var(--warn)">⚠ more than the order book shows, so the price may climb</span>' : ""}</div></div>`;
+    <div class="small">Spend <b>${fmt(B.cost)}</b>${farmH ? ` + ~${dur(3600 * farmH)} farming` : ""} → get back <b>${fmt(B.revenue)}</b> after tax = <b class="good">+${fmt(B.profit)}</b>${B.thin ? ' <span style="color:var(--warn)">⚠ more than the order book shows, so the price may climb</span>' : ""}</div>
+    ${(() => { const r = shardSellRate(bz, S, p.out, B.runs * B.q); if (!r) return "";
+      const sold = B.runs * B.q, atReal = sold * (r.real || 0) * (1 - 0.0125) - B.cost;
+      return `<div class="small">${r.slow || r.hours > 24 ? "🐢" : "⏱"} ${N(p.out)} sells ${r.rateTxt} on the Bazaar, so your ${sold.toLocaleString("en-US")} take about <b>${dur(3600 * r.hours)}</b> to sell (if you get a quarter of the buyers).
+        ${r.high && p.listed ? `<div class="muted">Priced at the past week's usual ~${fmt(p.sell)}, not today's listing of ${fmt(p.listed)}, which is probably too high. If it does sell at the listing, you make more.</div>` : r.high ? `<div style="color:var(--warn)">⚠ The listed price is probably too high. ${esc(sellWhy(r))} At ~${fmt(r.real)} this run would make <b>${atReal >= 0 ? "+" : ""}${fmt(atReal)}</b>.</div>` : r.hours > 24 ? `<div class="muted">That's more than a day of sales; selling fewer, or some to the top buy order (${fmt(r.bid)}), gets your coins back sooner.</div>` : ""}
+        ${r.loading ? '<div class="muted">Checking the past week\'s prices…</div>' : ""}</div>`; })()}</div>`;
 }
 // ---------- Money making sub-tab ----------
 // What testing showed: buying everything and flipping instantly barely makes anything, and farming then
@@ -3345,12 +3387,20 @@ function moneyFindings(S, bz, u){
   const all = farmPlans(S, bz, base);
   const kinds = p => Object.keys(p.need.farm).length;
   const fusion = all.filter(p => !p.sellRaw && !(p.spread > 3) && (u.multi || kinds(p) === 1));
-  const rated = fusion.map(p => ({...p, real:p.cph * REALISTIC})).filter(p => p.real > p.raw * 1.3);
+  // results listed well above what they sold for over the past week are priced at that week's median instead
+  const tax = 1 - base.tax / 100;
+  const realSell = (out, sell) => { const h = SHARD_HIST[out], m = bz.m[S.by[out]?.bz]; return h && m && m.ask > h.med * 1.25 ? Math.min(sell, h.med) : sell; };
+  const adjFarm = p => { const s2 = realSell(p.out, p.sell); if (s2 === p.sell) return p; const profit = p.q * s2 * tax - p.c; return {...p, listed:p.sell, sell:s2, profit, cph:Math.max(0, p.runsHr * profit)}; };
+  const adjPassive = x => { const s2 = realSell(x.out, x.sell); if (s2 === x.sell) return x; const pp = x.n * s2 * tax - x.cost; return {...x, listed:x.sell, sell:s2, p:pp, roi:pp / x.cost, daily:pp * Math.min(50, x.perDay * 0.25), perFusion:pp / x.need.fusions}; };
+  const cands = fusion.filter(p => p.cph * REALISTIC >= BORDER && p.cph * REALISTIC > p.raw * 1.3);
+  const rated = cands.map(adjFarm).map(p => ({...p, real:p.cph * REALISTIC})).filter(p => p.real > p.raw * 1.3).sort((a, b) => b.real - a.real);
   const worth = rated.filter(p => p.real >= WORTH), border = rated.filter(p => p.real >= BORDER && p.real < WORTH);
   const rawBest = all.filter(p => p.sellRaw).slice(0, 3);
-  const passive = moneyResults(S, bz, {...base, buy:"order", sell:"offer", depth:u.depth}).filter(x => !(x.spread > 3) && x.perDay >= 20).slice(0, 5);
+  const passCands = moneyResults(S, bz, {...base, buy:"order", sell:"offer", depth:u.depth}).filter(x => !(x.spread > 3) && x.perDay >= 20).slice(0, 15);
+  const passive = passCands.map(adjPassive).filter(x => x.p > 0).sort((a, b) => b.daily - a.daily).slice(0, 5);
   const instFlip = moneyResults(S, bz, {...base, buy:"instant", sell:"instant", depth:u.depth})[0];
-  return {worth, border, rawBest, passive, instFlip, total:fusion.length};
+  const histIds = [...cands, ...passCands].map(p => p.out);
+  return {worth, border, rawBest, passive, instFlip, total:fusion.length, histIds, histLoading:histIds.some(id => !(id in SHARD_HIST))};
 }
 function moneyHTML2(S, bz, u){
   const f = moneyFindings(S, bz, u), age = Math.round((Date.now() - bz.t) / 1000);
@@ -3365,13 +3415,14 @@ function moneyHTML2(S, bz, u){
   const row = p => `<tr${hide(p) ? ' style="display:none"' : ""}>
       <td>🏹 ${list(p.need.farm)}<div class="muted small">📍 ${areaOf(p)}</div></td>
       <td class="small">${Object.keys(p.need.buy).length ? "🛒 " + list(p.need.buy) : '<span class="muted">nothing</span>'}</td>
-      <td>${p.q}× ${N(p.out)}<div class="muted small">@ ${fmt(p.sell)}${p.steps > 1 ? ` · 🔗 ${p.steps}-step` : ""}</div></td>
+      <td>${p.q}× ${N(p.out)}<div class="muted small">@ ${fmt(p.sell)}${p.listed ? ` (listed ${fmt(p.listed)})` : ""}${p.steps > 1 ? ` · 🔗 ${p.steps}-step` : ""}</div>${sellRateHTML(bz, S, p.out, 0, !!p.listed)}</td>
       <td class="good"><b>${fmt(p.real)}</b><div class="muted small">model ${fmt(p.cph)}</div></td>
       <td>${(p.real / Math.max(1, p.raw)).toFixed(1)}×<div class="muted small">raw ${fmt(p.raw)}/hr</div></td>
       <td class="small"><details><summary>How</summary>${steps(p)}<div class="muted">${fmt(p.runsHr)} runs/hr · +${fmt(p.profit)} per run</div></details></td></tr>`;
   const head = `<thead><tr><th>Farm</th><th>Buy (per run)</th><th>Make → sell offer</th><th>Realistic /hr</th><th>vs. selling raw</th><th></th></tr></thead>`;
   const top = f.worth[0] || f.border[0];
-  return `${top ? `<div class="card best"><div class="muted small">BEST PLAN RIGHT NOW</div>
+  const histNote = f.histLoading ? `<div class="muted small" style="margin-bottom:8px">⏳ Checking the past week's prices, so the ranking may still change…</div>` : "";
+  return `${histNote}${top ? `<div class="card best"><div class="muted small">BEST PLAN RIGHT NOW</div>
       <div style="font-size:16px;margin:4px 0">Farm <b>${Object.keys(top.need.farm).map(N).join(" + ")}</b> <span class="muted small">📍 ${areaOf(top)}</span> → fuse into <b>${N(top.out)}</b> → sell offer</div>
       <div><span class="good" style="font-size:22px;font-weight:700">~${fmt(top.real)}/hour</span> <span class="muted">realistic (model says ${fmt(top.cph)}) · ${(top.real / Math.max(1, top.raw)).toFixed(1)}× selling it raw</span></div>
       ${steps(top)}</div>` : `<div class="msg">Nothing clears the bar right now with these settings. Try a higher speed or more chain steps, or check back after prices move.</div>`}
@@ -3386,7 +3437,7 @@ function moneyHTML2(S, bz, u){
     ${f.passive.length ? `<h3 class="ph" style="margin-top:18px">💤 Passive order flip <span class="muted small">(optional, needs spare coins)</span></h3>
     <p class="muted small">No farming: put buy orders on both inputs, fuse, and list a sell offer. Only high-volume flips without price-gap warnings. It works only while your orders keep filling.</p>
     <div class="card"><table><thead><tr><th>Buy orders</th><th>Make → sell offer</th><th>Per run</th><th>Per day (est.)</th><th>Coins in orders</th><th></th></tr></thead><tbody>
-    ${f.passive.map(x => `<tr><td class="small">${x.fa}× ${N(x.a)} + ${x.fb}× ${N(x.b)}${x.steps > 1 ? `<div class="muted">🔗 ${x.steps}-step</div>` : ""}</td><td>${x.n}× ${N(x.out)}<div class="muted small">@ ${fmt(x.sell)}</div></td>
+    ${f.passive.map(x => `<tr><td class="small">${x.fa}× ${N(x.a)} + ${x.fb}× ${N(x.b)}${x.steps > 1 ? `<div class="muted">🔗 ${x.steps}-step</div>` : ""}</td><td>${x.n}× ${N(x.out)}<div class="muted small">@ ${fmt(x.sell)}${x.listed ? ` (listed ${fmt(x.listed)})` : ""}</div>${sellRateHTML(bz, S, x.out, 0, !!x.listed)}</td>
       <td class="good">+${fmt(x.p)}<div class="muted small">${(x.roi * 100).toFixed(0)}% return</div></td><td>${fmt(x.daily)}<div class="muted small">market ~${fmt(x.perDay)} runs/day</div></td><td>${fmt(x.cost * Math.min(50, x.perDay * 0.25))}</td><td class="small"><details><summary>How</summary>${budgetHTML(S, bz, x, "chain", budget, Math.min(50, x.perDay * 0.25), false, 1)}</details></td></tr>`).join("")}
     </tbody></table></div>` : ""}
 
@@ -3396,7 +3447,7 @@ function moneyHTML2(S, bz, u){
         ${f.rawBest.map(p => `${N(p.sellRaw)} ~${fmt(p.cph)}/hr`).join(", ")}. For those, just sell what you farm.</li>
       <li><b>Expensive Legendary order flips</b> (Molthorn, Starborn…): huge on paper, but they need hundreds of millions in orders that rarely fill at those prices.</li>
       <li><b>Plans with a ⚠ price-gap warning</b> or under 10k weekly volume: the price usually isn't real.</li>
-    </ul><p class="muted">Model: SkyShards catch rates at ${u.speed}% speed, ${u.hours}h a day, selling at most ~25% of a market. Partners bought instantly, results sold with sell offers, 1.25% tax. ${f.total} fusion plans checked. Bazaar data from ${age}s ago.</p></details>`;
+    </ul><p class="muted">Model: SkyShards catch rates at ${u.speed}% speed, ${u.hours}h a day, selling at most ~25% of a market. Partners bought instantly, results sold with sell offers, 1.25% tax. ${f.total} fusion plans checked. Bazaar data from ${age}s ago. Sell rates are the Bazaar's weekly instant-buy volume; past-week prices from <a href="https://sky.coflnet.com/data" target="_blank" rel="noopener">SkyCofl</a>.</p></details>`;
 }
 function moneyPane(){
   const u = {...MONEY_UI_DEF, ...store.get("moneyUI", {})};
@@ -3425,6 +3476,8 @@ function initMoney(S, an){
       if (!$("#moneyOut")) return;
       const u = read(); store.set("moneyUI", u);
       $("#moneyOut").innerHTML = moneyHTML2(S, bz, u);
+      // price history for every result shown, then draw again with it
+      loadShardHist(S, moneyFindings(S, bz, u).histIds, () => { if ($("#moneyOut")) draw(false); });
       limitRows($("#moneyOut"));
       $("#borderBox")?.addEventListener("toggle", () => store.set("moneyUI", read()));
     } catch(e){ console.error(e); outEl.innerHTML = `<div class="msg err">Couldn't load Bazaar prices: ${esc(e.message)}</div>`; }
@@ -3445,6 +3498,12 @@ function initMoney(S, an){
   else document.querySelector('.subtabs [data-pane="money"]')?.addEventListener("click", () => draw(false), {once:true});
 }
 
+// the "Selling" line in a shard popup (filled in again once the price history arrives)
+function shardSellPopup(S, id){
+  const x = shardSellRate(BZFULL, S, id, 0); if (!x) return "";
+  if (x.loading) loadShardHist(S, [id], () => { const el = document.getElementById("shSell"); if (el) el.innerHTML = shardSellPopup(S, id); });
+  return `Selling: ${x.slow ? "🐢 " : "⏱ "}${x.rateTxt} with sell offers at ${fmt(x.ask)}; instant-sell (top buy order) pays ${x.bid ? fmt(x.bid) : "nothing right now"}.${x.hist ? ` Past week: usually ~${fmt(x.hist.med)}.` : ""}${x.high ? ` <span style="color:var(--warn)">⚠ The listed price is probably too high. ${esc(sellWhy(x))}</span>` : ""}${x.loading ? ' <span class="muted">Checking the past week…</span>' : ""}`;
+}
 function openShard(id){
   const S = SHARDS, an = S?.an; if (!an) return;
   const r = an.byId[id], s = r.s, m = $("#modal");
@@ -3472,6 +3531,7 @@ function openShard(id){
     <p><b>${esc(s.attr)}</b> ${lvlDots(r.level)} level ${r.level}/10</p>
     <p>${shardDescHTML(s, r.level || 1)}</p>
     <p class="small">${r.price ? `Bazaar: <b>${fmt(r.price)}</b> each · ` : ""}${r.fusion ? `Cheapest fusion ≈ <b>${fmt(r.fusion.cost)}</b> each · ` : ""}${r.level < 10 ? `${r.toMax} more shards to max${r.bestCost ? ` (≈ ${fmt(Math.max(0, r.toMax - r.loose) * r.bestCost)})` : ""}` : "Maxed"}${r.loose ? ` · you have ${r.loose} loose` : ""}</p>
+    ${BZFULL ? `<p class="small" id="shSell">${shardSellPopup(S, id)}</p>` : ""}
     <h4>Shards needed per level</h4>
     <table><thead><tr><th>Level</th>${s.cum.map((_, i) => `<th>${i + 1}</th>`).join("")}</tr></thead><tbody>
       <tr><td class="muted">Shards</td>${(SHARD_LVL[s.rarity] || []).map((n, i) => `<td class="${i < r.level ? "good" : ""}">${n}</td>`).join("")}</tr>
