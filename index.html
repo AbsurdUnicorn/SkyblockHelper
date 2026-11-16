@@ -21,13 +21,20 @@ button{cursor:pointer;background:var(--accent);color:#1a1300;border:none;font-we
 button.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line);font-weight:500}
 button:disabled{opacity:.5;cursor:default}
 main{max-width:1200px;margin:0 auto;padding:18px 20px 60px}
-nav{display:flex;flex-wrap:wrap;gap:8px 14px;margin-bottom:16px;align-items:flex-end}
+main{max-width:1440px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;align-items:start}
+main:has(nav#tabs:empty){display:block;max-width:1200px}
+nav#tabs::-webkit-scrollbar{width:6px}nav#tabs::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}nav#tabs::-webkit-scrollbar-track{background:transparent}
+nav#tabs{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+#notice{grid-column:1/-1}#notice:empty{display:none}
+nav#tabs{position:sticky;top:14px;display:flex;flex-direction:column;gap:14px;max-height:calc(100vh - 28px);overflow-y:auto;padding-right:4px}
+.demo-note{font-size:12px;color:var(--muted);margin:-4px 0 12px}
 .dropline{white-space:nowrap;line-height:1.5}
-.tgroup{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:4px;border:1px solid var(--line);border-radius:10px;position:relative}
-.tglabel{position:absolute;top:-8px;left:10px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--bg);padding:0 4px}
-nav .tgroup:has(.tglabel){padding-top:8px}
-nav button{background:var(--panel2);color:var(--muted);border:1px solid var(--line);font-weight:500}
-nav button.on{background:var(--accent);color:#1a1300;border-color:var(--accent)}
+.tgroup{display:flex;flex-direction:column;gap:1px}
+.tglabel{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 10px 4px;font-weight:600}
+nav button{background:none;color:var(--muted);border:none;font-weight:500;text-align:left;padding:6px 10px;border-radius:7px;width:100%;white-space:nowrap}
+nav button:hover{background:var(--panel2);color:var(--text)}
+nav button.on{background:var(--panel2);color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+@media (max-width:860px){main{display:block}nav#tabs{position:static;flex-direction:row;overflow-x:auto;max-height:none;margin-bottom:14px;gap:6px}.tgroup{flex-direction:row}.tglabel{display:none}nav button{width:auto}}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
 .card h3{margin:0 0 8px;font-size:14px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
@@ -298,6 +305,15 @@ tr:focus-visible{outline-offset:-2px}
 .mnum{text-align:right;white-space:nowrap}
 label.inline input{width:64px;margin:0 2px}
 .pill.warn{background:#4a3a12;color:#ffd27a;border-color:#6b5418}
+.mtool{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:0 0 12px}
+.mtool label{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+.mtool input[data-filter]{min-width:220px}
+.mtool .grow{flex:1}
+.mtop-bar{padding-bottom:12px;border-bottom:1px solid var(--line)}
+.mchips{margin-bottom:10px}
+.mstats{margin-bottom:12px;padding:10px 14px}.mstats summary{cursor:pointer;list-style:none}.mstats summary::-webkit-details-marker{display:none}
+.mstats .mset{margin-top:12px}
+div.mtop{margin:0 0 12px;padding:10px 14px;border-left:3px solid var(--good);background:var(--panel);border-radius:8px}
 .mspeedrow{margin:8px 0 4px}.mspeed input{width:90px;margin-left:6px}
 </style>
 </head>
@@ -2096,13 +2112,14 @@ function mwSell(id, P, S){
 }
 // median recent AH sale for every valuable AH-only drop in the tables (cached 6 hours), fetched in the background
 async function mwLoadMedians(){
-  const D = MW.D, P = MW.P; if (!D || !P || MW.medBusy) return;
+  const D = MW.D, P = MW.P; if (!D || !P) return;
+  if (MW.medBusy){ MW.medAgain = true; return; }   // asked again while running: do another pass afterwards
   const names = new Set();
   for (const ts of Object.values(D.slayers)) for (const t of ts) t.rows.forEach(r => names.add(r.item));
   for (const T of Object.values(D.kuudra)) [...T.free, ...T.paid].forEach(r => names.add(r.item));
   for (const f of Object.values(D.floors)) for (const c of Object.values(f)) c.rows.forEach(r => names.add(r.item));
   if (MW.D2){ for (const m of Object.values(MW.D2.mobs)) (m?.rows || []).forEach(r => names.add(r.item)); for (const rows of Object.values(MW.D2.corpses)) rows.forEach(r => names.add(r.item)); MW.D2.diana.treasure.forEach(t => t.item && names.add(t.item)); }
-  const ids = [...new Set([...[...names].map(n => mwId(n, P)), ...(MW.motes || []).map(m => m.id)].filter(id => id && !P.bz[id] && (P.bin[id] || 0) >= 100e3 && !(id in (P.med || {}))))];
+  const ids = [...new Set([...[...names].map(n => mwId(n, P)), ...(MW.motes || []).map(m => m.id), ...Object.values(MW.cur || {}).flat().map(x => x.id)].filter(id => id && !P.bz[id] && (P.bin[id] || 0) >= 100e3 && !(id in (P.med || {}))))];
   if (!ids.length) return;
   MW.medBusy = true; P.med ||= {};
   await pool(ids, 4, async id => {
@@ -2110,6 +2127,7 @@ async function mwLoadMedians(){
     catch { P.med[id] = 0; }
   });
   MW.medBusy = false;
+  if (MW.medAgain){ MW.medAgain = false; return mwLoadMedians(); }
   if (tab === "money") render();
 }
 // what one item costs to buy
@@ -2119,7 +2137,7 @@ function mwDrops(list, P, S){
 }
 
 // ---------- methods ----------
-const MW_DEF = {mode:"instant", tax:1.25, mf:0, ff:"", bps:"", ms:"", mfort:"", gfort:"", pristine:"", uptime:"", share:5, preset:"casual", hf:""};
+const MW_DEF = {mode:"instant", tax:1.25, mf:0, ff:"", bps:"", ms:"", mfort:"", gfort:"", pristine:"", uptime:"", share:5, preset:"casual", hf:"", sort:"real"};
 const mwSet = () => ({...MW_DEF, ...store.get("money:set", {})});
 const SLAYER_MIN = [1.5, 2, 3, 4, 6];                 // default minutes per boss (incl. spawning) by tier: your speed, change it per boss
 const KUUDRA_MIN = [5, 5, 6, 7, 9];
@@ -2262,7 +2280,9 @@ async function mwCraftFlips(P, S, capital){
 // ---------- more ways to make coins: fishing, pests, Diana, mob grinding, minibosses, corpses, foraging, minions, the Forge, NPC flips ----------
 // Same idea as above: drop tables come live from the wiki (each mob's {{Mob Drops Table}}, the minion data module, burrow and corpse loot),
 // prices are live, and the only guesses are your rates, which you can change per method.
-const MW2_GRIND = [["Zealot", "end", 600], ["Zealot Bruiser", "end", 200], ["Voidling Extremist", "end", 150], ["Ghost", "dwarven", 300], ["Treasure Hoarder", "dwarven", 120]];
+const MW2_GRIND = [["Zealot", "end", 600], ["Zealot Bruiser", "end", 200], ["Voidling Extremist", "end", 150], ["Obsidian Defender", "end", 300], ["Seer", "end", 300], ["Ghost", "dwarven", 300], ["Treasure Hoarder", "dwarven", 120],
+  ["Goblin", "dwarven", 500], ["Star Sentry", "dwarven", 30], ["Glacite Walker", "glacite", 400], ["Automaton", "crystal", 300], ["Yog", "crystal", 300], ["Corleone", "crystal", 15], ["Golden Ghoul", "hub", 400],
+  ["Flaming Spider", "crimson", 400], ["Kada Knight", "crimson", 200], ["Wither Spectre", "crimson", 200], ["Arachne", "spider", 6]];
 const MW2_MINI = ["Bladesoul", "Ashfang", "Barbarian Duke X", "Mage Outlaw", "Magma Boss"];
 // regular pests only: the Field Mouse (from Mouse Traps) and Lunar Moth are rare special spawns, not something you can farm at a steady rate
 const MW2_PESTS = ["Beetle", "Cricket", "Dragonfly", "Earthworm", "Firefly", "Fly", "Locust", "Mite", "Mosquito", "Moth", "Praying Mantis", "Rat", "Slug"];
@@ -2743,7 +2763,7 @@ function mwLoad(force){
     try { MW.shards = await loadShards(); } catch { MW.shards = null; }
     if (!MW.tasks || force) mwLoadCofl();
     await Promise.all(["POLARVOID_BOOK", "EXPORTABLE_CARROTS"].map(id => fetchNeu(id).catch(() => null)));
-    if (!MW.motes) loadNpcIndex().then(() => mwLoadMotes(MW.P, mwSet())).then(r => { MW.motes = r; mwLoadMedians(); if (tab === "money") render(); }).catch(() => {});
+    if (!MW.cur) loadNpcIndex().then(() => mwLoadCurrencies(MW.P, mwSet())).then(r => { MW.cur = r; mwLoadMedians(); if (tab === "money") render(); }).catch(() => {});
     const npc = {}; for (const it of RES.items) if (it.npc_sell_price) npc[it.id] = it.npc_sell_price;
     MW.P = {bz:bz.m, bin:pr.bin || {}, npc, items:RES.items, med:MW.P?.med || {}};
     setTimeout(mwLoadMedians, 0);
@@ -2813,6 +2833,85 @@ function mwNpcHTML(S){
     ${L.map(f => `<tr><td><b>${esc(f.name)}</b></td><td class="small">${esc(f.npc)}<div class="muted">${esc(f.island)}</div></td><td class="mnum">${fmt(f.buy)}</td><td class="mnum">${fmt(f.sell)}</td><td class="mnum"><b class="good">${fmt(f.profit)}</b></td><td class="mnum small">${fmt(f.vol)}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">No NPC item sells for more on the Bazaar right now.</div>')
       : `<button class="mini" data-mnpc${MW.npcBusy ? " disabled" : ""}>${MW.npcBusy ? "Loading NPC shops…" : "🔎 Find NPC flips"}</button> <span class="small muted">Loads every NPC shop (the first time takes a minute).</span>`}`;
 }
+// ---------- Money tab layout: one ranked list (our maths + SkyCofl's measured methods), filter chips, stats in one panel ----------
+const MW_CATS = [["all", "All"], ["slayer", "🗡 Slayers"], ["dungeon", "💀 Dungeons & Kuudra"], ["combat", "⚔ Mobs & bosses"], ["farming", "🌾 Farming & Garden"], ["mining", "⛏ Mining"], ["fishing", "🎣 Fishing"], ["foraging", "🪓 Foraging & Hunting"], ["rift", "🌀 Rift"], ["other", "📦 Other"]];
+const mwCatOf = m => ({slayer:"slayer", kuudra:"dungeon", dungeon:"dungeon", mob:"combat", diana:"combat", farm:"farming", pest:"farming", mine:"mining", fish:"fishing", forage:"foraging", hunt:"foraging", rift:"rift"})[m.cat] || "other";
+const mwTaskCat = t => ({Slayer:"slayer", Kuudra:"dungeon", Dungeon:"dungeon", "Mob Farming":"combat", Combat:"combat", Event:"combat", Garden:"farming", Farming:"farming", Mining:"mining", Fishing:"fishing", Foraging:"foraging", Hunting:"foraging"})[t.category] || "other";
+// every currency NPCs take that isn't coins, ranked by what its items sell for (from the NEU NPC shops)
+const MW_CUR_NAMES = {SKYBLOCK_BIT:["Bits", "from Booster Cookies"], SKYBLOCK_COPPER:["Copper", "from Garden visitors"], SKYBLOCK_MOTE:["Motes", "earned in the Rift"], SKYBLOCK_NORTH_STAR:["North Stars", "from the Season of Jerry"],
+  SKYBLOCK_PELT:["Pelts", "from Trevor's animal hunts"], SKYBLOCK_CARNIVAL_POINT:["Carnival Tokens", "from Carnival games"], SKYBLOCK_GOLD_MEDAL:["Gold medals", "from Jacob's contests"], SKYBLOCK_SILVER_MEDAL:["Silver medals", "from Jacob's contests"],
+  SKYBLOCK_BRONZE_MEDAL:["Bronze medals", "from Jacob's contests"], SKYBLOCK_PEST:["Pests (Garden)", "killed pests"], SKYBLOCK_CHOCOLATE:["Chocolate", "from the Chocolate Factory"]};
+async function mwLoadCurrencies(P, S){
+  const idx = await loadNpcIndex(), out = {};
+  for (const [id, offers] of Object.entries(idx)) for (const o of offers){
+    if (o.coins || o.inputs.length !== 1) continue;
+    const [cur, n] = o.inputs[0]; if (!/^SKYBLOCK_/.test(cur) || /GEM|COIN/.test(cur) || !n) continue;
+    (out[cur] ||= []).push({id, name:mwName(id), npc:o.npc, cost:n / (o.out || 1)});
+  }
+  return out;
+}
+// one currency's shop items, priced now and ranked by coins per unit
+function mwCurRank(cur){
+  const L = MW.cur?.[cur]; if (!L || !MW.P) return [];
+  const S = mwSet(), seen = new Set();
+  return L.map(x => { const s = mwSell(x.id, MW.P, S); return {...x, sell:s.v, src:s.src, per:s.v / x.cost}; }).filter(x => x.sell > 0 && !(/^AH/.test(x.src) && MW.P.medVol?.[x.id] === 0)).sort((a, b) => b.per - a.per).filter(x => !seen.has(x.id) && seen.add(x.id));
+}
+function mwCurrencyHTML(S){
+  const C = MW.cur;
+  if (!C) return `<h4>🪙 Currencies → coins</h4><div class="empty">Loading NPC shops…</div>`;
+  const R = Object.fromEntries(Object.keys(C).map(k => [k, mwCurRank(k)]).filter(([, L]) => L.length));
+  const keys = Object.keys(R).sort((a, b) => (MW_CUR_NAMES[a] ? 0 : 1) - (MW_CUR_NAMES[b] ? 0 : 1) || a.localeCompare(b));
+  const name = k => MW_CUR_NAMES[k]?.[0] || mwTitle(k.replace(/^SKYBLOCK_/, ""));
+  const ck = mwBuy("BOOSTER_COOKIE", MW.P, S), bits = R.SKYBLOCK_BIT?.[0];
+  return `<h4>🪙 Currencies → coins</h4><p class="muted small">What one unit of each currency is worth if you spend it on the item that sells best (Bazaar, AH or NPC, at our prices).</p>
+    ${bits && ck ? `<div class="msg">🍪 A Booster Cookie costs <b>${fmt(ck)}</b> and gives 4,800 bits (more with Fame). Spent on ${esc(bits.name)}, those bits are worth <b>${fmt(4800 * bits.per)}</b>: ${4800 * bits.per > ck ? `<span class="good">a profit of ${fmt(4800 * bits.per - ck)}</span>` : `<span class="bad">less than the cookie</span>`}.</div>` : ""}
+    <div class="card"><table><thead><tr><th>Currency</th><th>Best item</th><th class="mnum">Coins per unit</th><th>Next best</th></tr></thead><tbody>
+    ${keys.map(k => { const L = R[k]; return `<tr><td><b>${esc(name(k))}</b><div class="small muted">${esc(MW_CUR_NAMES[k]?.[1] || "")}</div></td><td><a href="${COFL}/item/${encodeURIComponent(L[0].id)}" target="_blank" rel="noopener">${esc(L[0].name)}</a> <span class="small muted">${L[0].cost >= 10 ? fmt(L[0].cost) : mwQty(L[0].cost)} each from ${esc(L[0].npc)}</span></td>
+      <td class="mnum"><b class="good">${L[0].per >= 10 ? fmt(L[0].per) : L[0].per.toFixed(2)}</b></td><td class="small muted">${L.slice(1, 3).map(x => `${esc(x.name)} (${x.per >= 10 ? fmt(x.per) : x.per.toFixed(2)})`).join(", ")}</td></tr>`; }).join("")}</tbody></table></div>`;
+}
+// rows for the one ranked list
+function mwRows(st, M, S){
+  const used = new Set();
+  // a one-to-one match shares a row; tasks measured for all tiers or kinds together (slayers, pests) keep their own row
+  for (const m of M){ const x = mwTaskFor(m); m.task = x?.t || null; m.taskAll = !!x?.all; if (x && !x.all) used.add(x.t.slug); }
+  const ours = M.map(m => ({m, cat:mwCatOf(m), ok:m.ok, mine:m.hour, real:m.task && !m.taskAll ? m.task.coinsPerHour : null}));
+  const comm = (Array.isArray(MW.tasks) ? MW.tasks : []).filter(t => !used.has(t.slug)).map(t => { const s = mwTaskStatus(st, t); return {t, cat:mwTaskCat(t), ok:s.ok, why:s.why, mine:null, real:t.coinsPerHour}; });
+  return [...ours, ...comm];
+}
+function mwRowHTML(r, S){
+  const real = r.real != null ? `<b class="good">${fmt(r.real)}</b>${r.m?.taskAll ? '<span class="small muted" title="Measured for all tiers or kinds together"> *</span>' : ""}` : '<span class="muted">—</span>';
+  if (r.t){
+    const t = r.t;
+    return `<tr class="clk" data-mtask="${esc(t.slug)}"${r.ok ? "" : ' style="opacity:.6"'}><td>👥 <b>${esc(t.name)}</b> <span class="small muted">${esc(t.where || t.category)}</span>${t.type === "limited" ? ' <span class="pill">daily limit</span>' : t.type === "passive" ? ' <span class="pill">passive</span>' : ""}${r.ok ? "" : ` <span class="small muted">🔒 ${esc(r.why)}</span>`}</td>
+      <td class="mnum muted">—</td><td class="mnum">${real}</td><td class="mnum muted">—</td></tr>`;
+  }
+  const m = r.m, h = m.hour, cls = h == null ? "muted" : h > 0 ? "good" : "bad";
+  return `<tr class="clk" data-mm="${esc(m.key)}"${m.ok ? "" : ' style="opacity:.6"'}><td>${m.icon} <b>${esc(m.name)}</b>${m.ok ? "" : ` <span class="small muted">🔒 ${esc(m.why)}</span>`}${m.slow?.length ? ' <span class="pill warn" title="More than the market can take: only what it absorbs is counted">slow to sell</span>' : ""}${m.unknown.length ? ` <span class="pill" title="Some drops have no price">${m.unknown.length} unpriced</span>` : ""}</td>
+    <td class="mnum"><b class="${cls}">${h == null ? "add Mining Speed" : fmt(h)}</b></td><td class="mnum">${real}</td><td class="mnum small">${fmt(m.net)} <span class="muted">/ ${m.unit}</span></td></tr>`;
+}
+function mwMethodsHTML(st, M, S){
+  const cat = store.get("money:cat", "all"), byReal = S.sort !== "mine";
+  const all = mwRows(st, M, S).filter(r => S.only === false || r.ok);
+  const count = k => all.filter(r => k === "all" || r.cat === k).length;
+  const val = r => byReal ? (r.real ?? r.mine ?? -Infinity) : r.mine != null ? r.mine : (r.real ?? 0) - 1e15;
+  const rows = all.filter(r => cat === "all" || r.cat === cat).filter(r => (r.mine ?? 0) > 0 || (r.real ?? 0) > 0).sort((a, b) => val(b) - val(a));
+  return `<div class="seg mchips">${MW_CATS.map(([k, l]) => `<button data-mcat="${k}" class="${k === cat ? "on" : ""}">${l} <span class="cnt">${count(k)}</span></button>`).join("")}</div>
+    <div class="mtool"><input data-filter="mwTbl" placeholder="🔎 Search methods…">
+      <label>Rank by <select data-mset="sort"><option value="mine"${byReal ? "" : " selected"}>your estimate</option><option value="real"${byReal ? " selected" : ""}>what players make</option></select></label>
+      <span class="small muted">Your estimate = average drops × live prices × your speed. Players make = measured by <a href="${COFL}/tasks" target="_blank" rel="noopener">SkyCofl</a>. Click any row for details.</span></div>
+    ${rows.length ? `<div class="card"><table id="mwTbl" data-limit="40"><thead><tr><th>Method</th><th class="mnum">Your estimate / h</th><th class="mnum">Players make / h</th><th class="mnum">Profit each</th></tr></thead><tbody>${rows.map(r => mwRowHTML(r, S)).join("")}</tbody></table></div>` : `<div class="empty">Nothing here${S.only !== false ? " that you can do yet" : ""}.</div>`}`;
+}
+function mwStatsHTML(st, S){
+  const f = mwFarmFortune(st, "WHEAT"), num = (k, label, ph, extra = "") => `<label>${label}<input type="number" min="0" data-mset="${k}" value="${esc(S[k])}" placeholder="${esc(ph)}" ${extra}></label>`;
+  const keys = ["mf", "ff", "bps", "ms", "mfort", "gfort", "pristine", "forf", "hf"], set = keys.filter(k => S[k] !== "" && S[k] != null && !(k === "mf" && !+S.mf)).length;
+  const missing = [S.ff === "" && "Farming Fortune", !(+S.ms) && "Mining Speed"].filter(Boolean);
+  return `<details class="card mstats"${store.get("money:statsOpen", false) ? " open" : ""}><summary>⚙ <b>Your stats</b> <span class="small muted">— what the API can't see: ${set} of ${keys.length} filled in${missing.length ? `; add your ${missing.join(" and ")} for accurate farming and mining` : ""}</span></summary>
+    <div class="mset">
+      ${num("mf", "Magic Find", "0")}${num("ff", "Farming Fortune", `≈${f.total} from profile`)}${num("bps", "Crops per second", String(mwPre(S).bps), 'max="20" step="0.5"')}
+      ${num("ms", "Mining Speed", "from /stats")}${num("mfort", "Mining Fortune", "0")}${num("gfort", "Gemstone Fortune", "0")}${num("pristine", "Pristine", "0", 'step="0.1"')}
+      ${num("forf", "Foraging Fortune", "0")}${num("hf", "Hunting Fortune", "0")}
+    </div><p class="small muted">Copy these from your in-game stats (SkyBlock Menu → Your Profile). They're saved on this computer only.</p></details>`;
+}
 function viewMoney(st){
   if (!MW.D || !MW.P){
     if (!MW.err && !MW.loading) mwLoad();
@@ -2820,38 +2919,31 @@ function viewMoney(st){
       : `<div class="empty">Loading live prices and the wiki's drop tables…</div>`;
   }
   if (Date.now() - MW.t > 120e3 && !MW.loading) setTimeout(() => mwLoad(), 0);
+  MW.motes = mwCurRank("SKYBLOCK_MOTE").map(x => ({...x, motes:x.cost, perMote:x.per}));
   const S = mwSet(), M = [...mwMethods(st, MW.D, MW.P, S), ...(MW.D2 ? mwMethods2(st, MW.D2, MW.P, S, MW.mayor) : []), ...(MW.D2 ? mwMethods3(st, MW.D2, MW.P, S, MW.shards) : [])], capital = (st.purse || 0) + (st.bank || 0);
   MW.last = M;
   for (const m of M) mwFlagSlow(m, MW.P, S);
-  const pick = c => mwSort(M.filter(m => m.cat === c));
-  const best = mwSort(M.filter(m => (S.only === false || m.ok) && m.hour != null && m.hour > 0));
-  const top = best[0];
+  const top = mwSort(M.filter(m => m.ok && m.hour > 0))[0];
+  const age = MW.t ? Math.round((Date.now() - MW.t) / 1000) : null;
   const flips = mwFlips(MW.P, S, capital);
-  const intro = `<p class="muted small">Coins per hour = (average drops × live price − costs) × how many you do in an hour. Click a row to see the maths and set your own speed for it.</p>`;
-  const mineNote = !(+S.ms) ? `<div class="msg">Enter your <b>Mining Speed</b> (and fortunes) from your in-game stats to rank mining. They aren't in the API.</div>` : "";
-  const farmNote = S.ff === "" ? `<div class="msg">Farming uses <b>${mwFarmFortune(st, "WHEAT").total}</b> Farming Fortune estimated from your profile, without gear or pets. Enter your real number above for accurate farming.</div>` : "";
-  return `${mwSettings(st, S)}
-    ${top ? `<div class="card mtop clk" data-mm="${esc(top.key)}"><div class="small muted">Best for you right now</div><div class="big">${top.icon} ${esc(top.name)}</div><div><b class="good">${fmt(top.hour)}</b> coins/hour · ${fmt(top.net)} per ${top.unit}</div></div>` : ""}
+  return `<div class="mtool mtop-bar">
+      <label>Speed <select data-mset="preset">${Object.entries(MW_PRESETS).map(([k, p]) => `<option value="${k}"${(S.preset || "casual") === k ? " selected" : ""}>${p.label}</option>`).join("")}</select></label>
+      <label>Sell with <select data-mset="mode"><option value="instant"${S.mode === "instant" ? " selected" : ""}>instant sell</option><option value="offer"${S.mode === "offer" ? " selected" : ""}>sell offers</option></select></label>
+      <label class="chk"><input type="checkbox" data-mset="only"${S.only !== false ? " checked" : ""}> Only what I can do</label>
+      <span class="grow"></span>
+      <span class="small muted">Prices ${age != null ? (age < 60 ? "just updated" : `${Math.round(age / 60)} min old`) : ""}${MW.medBusy ? " · checking AH sales…" : ""} <button class="mini" data-mreload>↻</button></span>
+    </div>
+    ${mwStatsHTML(st, S)}
+    ${top ? `<div class="mtop clk" data-mm="${esc(top.key)}">🏆 Best for you right now: <b>${top.icon} ${esc(top.name)}</b> · <b class="good">${fmt(top.hour)}</b> coins/hour${top.task ? ` <span class="small muted">(players make ${fmt(top.task.coinsPerHour)})</span>` : ""}</div>` : ""}
     ${subTabs("money", [
-      {id:"best", label:"🏆 Best for you", count:best.length, html:intro + farmNote + mineNote + mwTable(best, S, 25)},
-      {id:"community", label:"👥 Community", count:Array.isArray(MW.tasks) ? MW.tasks.filter(t => S.only === false || mwTaskStatus(st, t).ok).length : null, html:mwCommunityHTML(st, S)},
-      {id:"slayer", label:"🗡 Slayers", count:pick("slayer").length, html:mwTable(pick("slayer"), S)},
-      {id:"farm", label:"🌾 Farming", count:pick("farm").length, html:farmNote + mwTable(pick("farm"), S)},
-      {id:"mine", label:"⛏ Mining", count:pick("mine").length, html:mineNote + mwTable(pick("mine"), S)},
-      {id:"kuudra", label:"🐙 Kuudra", count:pick("kuudra").length, html:mwTable(pick("kuudra"), S)},
-      {id:"dungeon", label:"💀 Dungeons", count:pick("dungeon").length, html:mwTable(pick("dungeon"), S)},
-      {id:"fish", label:"🎣 Fishing", count:pick("fish").length, html:mwTable(pick("fish"), S)},
-      {id:"pest", label:"🐛 Pests", count:pick("pest").length, html:st.garden ? mwTable(pick("pest"), S) : '<div class="empty">Pests need the Garden.</div>'},
-      {id:"diana", label:"🦅 Diana", count:pick("diana").length, html:mwTable(pick("diana"), S)},
-      {id:"mob", label:"⚔ Mobs", count:pick("mob").length, html:mwTable(pick("mob"), S)},
-      {id:"forage", label:"🪓 Foraging", count:pick("forage").length, html:mwTable(pick("forage"), S)},
-      {id:"hunt", label:"🏹 Hunting", count:pick("hunt").length, html:`<p class="muted small">Shards per hour are SkyShards' typical rates for each shard, scaled by your speed preset and Hunting Fortune. Click one to set your own rate.</p>` + mwTable(pick("hunt"), S, 30)},
-      {id:"rift", label:"🌀 Rift", count:pick("rift").length, html:mwTable(pick("rift"), S)},
-      {id:"minion", label:"🤖 Minions", html:MW.D2 ? mwMinionsHTML(st, S) : ""},
-      {id:"forge", label:"🔥 Forge", html:mwForgeHTML(st, S)},
-      {id:"flips", label:"💱 Flips", count:flips.length, html:mwFlipsHTML(flips, S, capital)},
-    ])}`;
+      {id:"methods", label:"📋 Methods", count:mwRows(st, M, S).filter(r => (S.only === false || r.ok) && ((r.mine ?? 0) > 0 || (r.real ?? 0) > 0)).length, html:mwMethodsHTML(st, M, S)},
+      {id:"passive", label:"🤖 Passive income", html:`<h4>🤖 Minions</h4>${MW.D2 ? mwMinionsHTML(st, S) : ""}<h4>🔥 Forge</h4>${mwForgeHTML(st, S)}`},
+      {id:"trading", label:"💱 Trading", html:mwFlipsHTML(flips, S, capital) + mwCurrencyHTML(S)},
+    ])}
+    <p class="small muted msrc">Prices: live Bazaar, NPC and AH (lowest BIN or median recent sale, whichever is lower; <a href="${COFL}/data" target="_blank" rel="noopener">AH sales provided by SkyCofl</a>). Drop chances: Hypixel SkyBlock Wiki. Shard rates: SkyShards. Measured earnings: <a href="${COFL}/tasks" target="_blank" rel="noopener">SkyCofl</a>.</p>`;
 }
+document.addEventListener("click", e => { const c = e.target.closest("[data-mcat]"); if (c){ store.set("money:cat", c.dataset.mcat); render(); } });
+document.addEventListener("toggle", e => { if (e.target.matches?.("details.mstats")) store.set("money:statsOpen", e.target.open); }, true);
 function mwFlipsHTML(flips, S, capital){
   const share = `<label class="inline">your share of each item's trading <input type="number" min="0.5" max="100" step="0.5" data-mset="share" value="${esc(S.share)}">%</label>`;
   const bz = flips.length ? `<div class="card"><table data-limit="15"><thead><tr><th>Item</th><th class="mnum">Buy order at</th><th class="mnum">Sell offer at</th><th class="mnum">Profit each</th><th class="mnum">Traded / hour</th><th class="mnum">Coins / hour</th></tr></thead><tbody>
@@ -2906,7 +2998,7 @@ document.addEventListener("click", e => {
 document.addEventListener("change", e => {
   const s = e.target.closest("[data-mset]"), t = e.target.closest("[data-mtime]"); if (!s && !t) return;
   const S = store.get("money:set", {});
-  if (s){ const k = s.dataset.mset; S[k] = s.type === "checkbox" ? s.checked : s.value === "" ? "" : isNaN(+s.value) ? s.value : +s.value; if (k === "mode" || k === "share" || k === "tax") { MW.craft = null; MW.npc = null; MW.motes = null; }
+  if (s){ const k = s.dataset.mset; S[k] = s.type === "checkbox" ? s.checked : s.value === "" ? "" : isNaN(+s.value) ? s.value : +s.value; if (k === "mode" || k === "share" || k === "tax") { MW.craft = null; MW.npc = null; MW.motes = null; MW.cur = null; }
     if (k === "preset"){ for (const g of ["bps", "uptime", "scph", "pph", "bph", "cph", "lph", "hotspot"]) S[g] = ""; for (let i = localStorage.length - 1; i >= 0; i--){ const lk = localStorage.key(i); if (lk && lk.includes("money:t:")) localStorage.removeItem(lk); } } store.set("money:set", S); }
   if (t){ const v = +t.value; if (t.dataset.global) { S[t.dataset.mtime] = v > 0 ? v : MW_DEF[t.dataset.mtime]; store.set("money:set", S); } else store.set("money:t:" + t.dataset.mtime, v > 0 ? v : 0); }
   if (tab === "money") render();
@@ -4833,9 +4925,10 @@ function saveHistory(key, snap){
 
 // ---------- rendering ----------
 let CUR = null; // {st, A, hist}
-const TAB_GROUPS = [["", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"]]], ["Progress", [["sblevel","⭐ SkyBlock Level"],["skills","📊 Skills"],["coll","📦 Collections"],["bestiary","👾 Bestiary"],["pets","🐾 Pets"],["museum","🏛 Museum"],["acc","💍 Accessories"],["minions","🤖 Minions"],["upgrades","⬆ Upgrades"]]],
-  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"]]], ["Islands", [["garden","🌾 Farming & Garden"],["fishing","🎣 Fishing"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["crimson","🔥 Crimson Isle"],["rift","🌀 Rift"]]], ["", [["shards","🔮 Shards"]]],
-  ["Shopping", [["money","💰 Money"],["plan","🛒 Plan"],["auto","🤖 Auto bulk plan"]]], ["", [["history","📈 History"]]]];
+const TAB_GROUPS = [["Overview", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"],["history","📈 History"]]],
+  ["Progress", [["sblevel","⭐ SkyBlock Level"],["skills","📊 Skills"],["coll","📦 Collections"],["bestiary","👾 Bestiary"],["pets","🐾 Pets"],["museum","🏛 Museum"],["acc","💍 Accessories"],["minions","🤖 Minions"],["upgrades","⬆ Upgrades"],["shards","🔮 Shards"]]],
+  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"]]], ["Islands", [["garden","🌾 Farming & Garden"],["fishing","🎣 Fishing"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["crimson","🔥 Crimson Isle"],["rift","🌀 Rift"]]],
+  ["Money", [["money","💰 Money"],["plan","🛒 Plan"],["auto","🤖 Auto bulk plan"]]]];
 const TABS = TAB_GROUPS.flatMap(g => g[1]);
 let tab = store.get("tab", "focus");
 
@@ -4879,7 +4972,7 @@ function render(){
   const {st, A} = CUR;
   const v = $("#view");
   const off = st.apiOff.length ? `<div class="msg err">No data for: <b>${st.apiOff.map(esc).join(", ")}</b>. Turn on these API settings in-game (SkyBlock Menu → Settings → API Settings), wait a few minutes, then reload.</div>` : "";
-  const demo = st.demo ? `<div class="msg">Showing <b>made-up demo data</b>. Enter your username and API key to see your real progress.</div>` : "";
+  const demo = st.demo ? `<div class="demo-note">🧪 Showing made-up demo data. Enter your username and API key above to see your own profile.</div>` : "";
   v.innerHTML = demo + off + ({focus:viewFocus, money:viewMoney, sblevel:viewSbLevel, crimson:viewCrimson, map:viewMap, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, history:viewHistory}[tab])(st, A);
   limitRows(v);
   setTimeout(fillShardCtx, 0);
