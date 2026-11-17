@@ -3301,8 +3301,8 @@ function farmPlans(S, bz, o){
 // Step-by-step plan for one run: what to farm, buy and fuse (rounded up to whole fusions)
 function farmTreeHTML(S, bz, o, C, id, amount){
   const F = S._flat, i = F.idx[id], s = S.by[id], h = C.how[i];
-  if (h === 2){ const w = s.where.find(w => w.place && !/Fusion|Shop/.test(w.method)); return `<li>🏹 Farm <b>${fmt(Math.ceil(amount - 1e-9))}×</b> ${shardName(s)}${w ? ` <span class="muted">📍 ${esc(w.place)} · ${esc(w.method)}</span>` : ""}</li>`; }
-  if (h === 1){ const p = bz.m[s.bz]; return `<li>🛒 Buy <b>${fmt(Math.ceil(amount - 1e-9))}×</b> ${shardName(s)} <span class="muted">@ ${fmt(o.buy === "instant" ? p?.ask : p?.bid)}</span></li>`; }
+  if (h === 2 && !o.buyAll){ const w = s.where.find(w => w.place && !/Fusion|Shop/.test(w.method)); return `<li>🏹 Farm <b>${fmt(Math.ceil(amount - 1e-9))}×</b> ${shardName(s)}${w ? ` <span class="muted">📍 ${esc(w.place)} · ${esc(w.method)}</span>` : ""}</li>`; }
+  if (h === 1 || h === 2){ const p = bz.m[s.bz]; return `<li>🛒 Buy <b>${fmt(Math.ceil(amount - 1e-9))}×</b> ${shardName(s)} <span class="muted">@ ${fmt(o.buy === "instant" ? p?.ask : p?.bid)}</span></li>`; }
   const A = S.list[C.ha[i]], B = S.list[C.hb[i]], q = C.hq[i], runs = Math.ceil(amount / q - 1e-9), spare = runs * q - amount;
   const kids = A.id === B.id ? farmTreeHTML(S, bz, o, C.prev || C, A.id, runs * (A.fuse + B.fuse)) : farmTreeHTML(S, bz, o, C.prev || C, A.id, runs * A.fuse) + farmTreeHTML(S, bz, o, C.prev || C, B.id, runs * B.fuse);
   return `<li>⚗ Fuse <b>${runs}×</b> ${A.fuse}× ${shardName(A)} + ${B.fuse}× ${shardName(B)} → <b>${fmt(runs * q)}×</b> ${shardName(s)}${spare > 1e-9 ? ` <span class="muted">(${fmt(spare)} spare)</span>` : ""}<ul>${kids}</ul></li>`;
@@ -3335,6 +3335,7 @@ function budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy){
   const counts = runs => {
     const acc = {buy:{}, farm:{}, fuse:{}};
     if (p.a === p.b) walk(S, p.C, p.a, runs * (p.fa + p.fb), acc); else { walk(S, p.C, p.a, runs * p.fa, acc); walk(S, p.C, p.b, runs * p.fb, acc); }
+    if (p.buyAll){ for (const [id, n] of Object.entries(acc.farm)) acc.buy[id] = (acc.buy[id] || 0) + n; acc.farm = {}; }   // buy instead of farming
     let cost = 0, thin = false; const each = {};
     for (const [id, n] of Object.entries(acc.buy)){
       const m = bz.m[S.by[id].bz];
@@ -3344,7 +3345,7 @@ function budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy){
     return {...acc, each, cost, thin, runs};
   };
   const hi = Math.max(1, Math.floor(maxRuns));
-  let best = counts(hi), why = maxRuns < 1 ? "market" : kind === "farm" ? "time" : "market";
+  let best = counts(hi), why = maxRuns < 1 || p.buyAll ? "market" : kind === "farm" ? "time" : "market";
   if (budget > 0 && best.cost > budget){
     let lo = 0, top = hi;   // largest run count the budget covers
     while (lo < top){ const mid = Math.ceil((lo + top) / 2); if (counts(mid).cost <= budget) lo = mid; else top = mid - 1; }
@@ -3466,17 +3467,36 @@ function moneyFindings(S, bz, u){
   const realSell = (out, sell) => { const h = SHARD_HIST[out], m = bz.m[S.by[out]?.bz]; return h && m && m.ask > h.med * 1.25 ? Math.min(sell, h.med) : sell; };
   // and sales are capped at a fair share of the buyers, given the stock other sellers already have listed
   const shareOf = out => { const m = bz.m[S.by[out]?.bz]; return marketShare(m, myOffer(m, out)?.left); };
+  // Shards you farm aren't free: you could sell them instead (farmVal, instant sell), or buy them instead of farming
+  // (farmBuy, instant buy). "gain" is what the fusion adds over selling what you farmed; "buyProfit" is the same plan
+  // with nothing farmed. When farming saves little, the plan says to just buy.
+  const hrs = Math.max(0.5, +u.hours || 2);
   const adjFarm = p => {
     const s2 = realSell(p.out, p.sell), profit = p.q * s2 * tax - p.c, sh = shareOf(p.out);
-    const runsHr = Math.min(p.runsHr, (p.sellVol || 0) / 7 * sh / Math.max(0.5, +u.hours || 2) / p.q);
-    return {...p, ...(s2 !== p.sell ? {listed:p.sell, sell:s2} : {}), profit, runsHr, cph:Math.max(0, runsHr * profit), sellShare:sh};
+    const mktRuns = (p.sellVol || 0) / 7 * sh / hrs / p.q;
+    const runsHr = Math.min(p.runsHr, mktRuns);
+    let farmVal = 0, farmBuy = 0, buyRuns = mktRuns;
+    for (const [id, n] of Object.entries(p.need.farm)){
+      const m = bz.m[S.by[id]?.bz] || {};
+      farmVal += n * (m.bidBook?.length ? bookAvg(m.bidBook, n).avg : m.bid || 0) * tax;
+      farmBuy += n * (m.askBook?.length ? bookAvg(m.askBook, n).avg : m.ask || Infinity);
+      buyRuns = Math.min(buyRuns, (m.askVol || 0) / 7 * 0.25 / hrs / n);
+    }
+    for (const [id, n] of Object.entries(p.need.buy)){ const m = bz.m[S.by[id]?.bz] || {}; buyRuns = Math.min(buyRuns, (m.askVol || 0) / 7 * 0.25 / hrs / n); }
+    const gain = profit - farmVal, buyProfit = profit - farmBuy;
+    const farmCph = Math.max(0, runsHr * gain) * REALISTIC, buyCph = Math.max(0, buyRuns * buyProfit) * REALISTIC;
+    // buy when it makes at least as much per hour, or when farming saves under 20% of the profit
+    const route = buyProfit > 0 && (buyCph >= farmCph || buyProfit >= 0.8 * profit) ? "buy" : "farm";
+    return {...p, ...(s2 !== p.sell ? {listed:p.sell, sell:s2} : {}), profit, runsHr, cph:Math.max(0, runsHr * profit), sellShare:sh,
+      farmVal, farmBuy, gain, buyProfit, buyRuns, farmCph, buyCph, route, real:route === "buy" ? buyCph : farmCph};
   };
   const adjPassive = x => {
     const s2 = realSell(x.out, x.sell), pp = x.n * s2 * tax - x.cost, sh = shareOf(x.out);
     return {...x, ...(s2 !== x.sell ? {listed:x.sell, sell:s2} : {}), p:pp, roi:pp / x.cost, daily:pp * Math.min(50, x.perDay * sh), perFusion:pp / x.need.fusions, sellShare:sh};
   };
-  const cands = fusion.filter(p => p.cph * REALISTIC >= BORDER && p.cph * REALISTIC > p.raw * 1.3);
-  const rated = cands.map(adjFarm).map(p => ({...p, real:p.cph * REALISTIC})).filter(p => p.real > p.raw * 1.3).sort((a, b) => b.real - a.real);
+  // first pass: the model's upper bound (farmed shards free, or bought with the whole market's pace)
+  const cands = fusion.filter(p => REALISTIC * p.profit * Math.max(p.runsHr, (p.sellVol || 0) / 7 * 0.25 / hrs / p.q) >= BORDER);
+  const rated = cands.map(adjFarm).filter(p => p.real > 0).sort((a, b) => b.real - a.real);
   const worth = rated.filter(p => p.real >= WORTH), border = rated.filter(p => p.real >= BORDER && p.real < WORTH);
   const rawBest = all.filter(p => p.sellRaw).slice(0, 3);
   const passCands = moneyResults(S, bz, {...base, buy:"order", sell:"offer", depth:u.depth}).filter(x => !(x.spread > 3) && x.perDay >= 20).slice(0, 15);
@@ -3491,27 +3511,34 @@ function moneyHTML2(S, bz, u){
   const budget = parseCoins(u.budget) || (CUR ? (CUR.st.purse || 0) + (CUR.st.bank || 0) : 0);
   const areaOf = p => p.areas.map(esc).join(", ");
   const steps = p => `<ul class="chain small"><li>⚗ Final fusion: ${p.fa}× ${N(p.a)} + ${p.fb}× ${N(p.b)} → <b>${p.q}×</b> ${N(p.out)} <span class="muted">sell offer @ ${fmt(p.sell)}</span>
-    <ul>${p.a === p.b ? farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.a, p.fa + p.fb) : farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.a, p.fa) + farmTreeHTML(S, bz, {buy:"instant"}, p.C, p.b, p.fb)}</ul></li></ul>
-    ${budgetHTML(S, bz, p, "farm", budget, p.runsHr * u.hours, true, u.speed / 100)}`;
+    <ul>${p.a === p.b ? farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.a, p.fa + p.fb) : farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.a, p.fa) + farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.b, p.fb)}</ul></li></ul>
+    <div class="small" style="margin:6px 0">${routeTxt(p)}</div>
+    ${budgetHTML(S, bz, p.route === "buy" ? {...p, buyAll:true} : p, "farm", budget, (p.route === "buy" ? p.buyRuns : p.runsHr) * u.hours, true, u.speed / 100)}`;
   const list = (o, icon) => Object.entries(o).map(([id, n]) => `${fmt(n)}× ${N(id)}`).join(" + ");
+  const routeTxt = p => p.route === "buy"
+    ? `🛒 <b>Just buy the ${list(p.need.farm)}</b> instead of farming: buying everything makes <b class="good">+${fmt(p.buyProfit)}</b> per fusion. ${p.buyProfit >= 0.8 * p.profit ? `Farming them saves only ${fmt(p.farmBuy)} per fusion (they'd sell for ${fmt(p.farmVal)}), so it isn't worth the time.` : `Farming saves ${fmt(p.farmBuy)} per fusion, but it's the slow part: farming you'd do about ${fmt(p.runsHr)} fusions an hour, buying about ${fmt(p.buyRuns)} (as many as the market takes). Buy these and use your farming time for something else.`}`
+    : `🏹 <b>Farm the ${list(p.need.farm)}</b>: they'd cost ${fmt(p.farmBuy)} to buy, so buying everything makes only +${fmt(p.buyProfit)} per fusion. Farmed, the fusion makes +${fmt(p.profit)}, which is <b class="good">+${fmt(p.gain)}</b> more than selling those shards (${fmt(p.farmVal)}).`;
+  const routeCell = p => p.route === "buy"
+    ? `🛒 Buy ${list(p.need.farm)}<div class="muted small">instead of farming (📍 ${areaOf(p)})</div>`
+    : `🏹 ${list(p.need.farm)}<div class="muted small">📍 ${areaOf(p)}</div>`;
   const hide = p => u.q && !(S.by[p.out].name + " " + Object.keys(p.need.farm).map(k => S.by[k].name).join(" ")).toLowerCase().includes(u.q.toLowerCase());
   const row = p => `<tr${hide(p) ? ' style="display:none"' : ""}>
-      <td>🏹 ${list(p.need.farm)}<div class="muted small">📍 ${areaOf(p)}</div></td>
+      <td>${routeCell(p)}</td>
       <td class="small">${Object.keys(p.need.buy).length ? "🛒 " + list(p.need.buy) : '<span class="muted">nothing</span>'}</td>
       <td>${p.q}× ${N(p.out)}<div class="muted small">@ ${fmt(p.sell)}${p.listed ? ` (listed ${fmt(p.listed)})` : ""}${p.steps > 1 ? ` · 🔗 ${p.steps}-step` : ""}</div>${sellRateHTML(bz, S, p.out, 0, !!p.listed)}</td>
-      <td class="good"><b>${fmt(p.real)}</b><div class="muted small">model ${fmt(p.cph)}</div></td>
-      <td>${(p.real / Math.max(1, p.raw)).toFixed(1)}×<div class="muted small">raw ${fmt(p.raw)}/hr</div></td>
-      <td class="small"><details data-k="f|${p.out}|${p.a}|${p.b}"><summary>How</summary>${steps(p)}<div class="muted">${fmt(p.runsHr)} runs/hr · +${fmt(p.profit)} per run</div></details></td></tr>`;
-  const head = `<thead><tr><th>Farm</th><th>Buy (per run)</th><th>Make → sell offer</th><th>Realistic /hr</th><th>vs. selling raw</th><th></th></tr></thead>`;
+      <td class="good"><b>${fmt(p.real)}</b><div class="muted small">${p.route === "buy" ? "buying, at the market's pace" : "on top of selling what you farm"}</div></td>
+      <td>${p.route === "buy" ? `<b>+${fmt(p.buyProfit)}</b><div class="muted small">${p.buyProfit >= 0.8 * p.profit ? `farming saves only ${fmt(p.farmBuy)}` : `farming saves ${fmt(p.farmBuy)} but limits you to ~${fmt(p.runsHr)}/hr`}</div>` : `<b>+${fmt(p.gain)}</b><div class="muted small">farmed shards worth ${fmt(p.farmVal)} · buying all: ${p.buyProfit > 0 ? "+" : ""}${fmt(p.buyProfit)}</div>`}</td>
+      <td class="small"><details data-k="f|${p.out}|${p.a}|${p.b}"><summary>How</summary>${steps(p)}<div class="muted">${fmt(p.route === "buy" ? p.buyRuns : p.runsHr)} runs/hr</div></details></td></tr>`;
+  const head = `<thead><tr><th>Farm or buy</th><th>Also buy (per run)</th><th>Make → sell offer</th><th>Realistic /hr</th><th>Profit per fusion</th><th></th></tr></thead>`;
   const top = f.worth[0] || f.border[0];
   const histNote = f.histLoading ? `<div class="muted small" style="margin-bottom:8px">⏳ Checking the past week's prices, so the ranking may still change…</div>` : "";
   return `${histNote}${top ? `<div class="card best"><div class="muted small">BEST PLAN RIGHT NOW</div>
-      <div style="font-size:16px;margin:4px 0">Farm <b>${Object.keys(top.need.farm).map(N).join(" + ")}</b> <span class="muted small">📍 ${areaOf(top)}</span> → fuse into <b>${N(top.out)}</b> → sell offer</div>
-      <div><span class="good" style="font-size:22px;font-weight:700">~${fmt(top.real)}/hour</span> <span class="muted">realistic (model says ${fmt(top.cph)}) · ${(top.real / Math.max(1, top.raw)).toFixed(1)}× selling it raw</span></div>
+      <div style="font-size:16px;margin:4px 0">${top.route === "buy" ? "Buy" : "Farm"} <b>${Object.keys(top.need.farm).map(N).join(" + ")}</b>${top.route === "buy" ? "" : ` <span class="muted small">📍 ${areaOf(top)}</span>`} → fuse into <b>${N(top.out)}</b> → sell offer</div>
+      <div><span class="good" style="font-size:22px;font-weight:700">~${fmt(top.real)}/hour</span> <span class="muted">realistic · +${fmt(top.route === "buy" ? top.buyProfit : top.gain)} per fusion${top.route === "buy" ? ", no farming needed" : " over selling what you farm"}</span></div>
       ${steps(top)}</div>` : `<div class="msg">Nothing clears the bar right now with these settings. Try a higher speed or more chain steps, or check back after prices move.</div>`}
 
     <h3 class="ph">✅ Worth doing <span class="muted">(${f.worth.length})</span></h3>
-    <p class="muted small">Farm one fast shard, fuse it with cheap bought partners, sell with a sell offer. "Realistic" is half the model's estimate, because catch rates, order fills and other players usually make the real number lower. Only plans with no price-gap warning, at least 10k weekly volume, and clearly better than selling raw.</p>
+    <p class="muted small">Fuse a cheap shard with bought partners and sell the result with a sell offer. Shards you farm aren't counted as free: they could be sold instead, so a farm plan only counts what the fusion adds on top of selling them. When buying the shard costs little more than it sells for, the plan says to <b>just buy it</b> and skip the farming. "Realistic" is half the model's estimate, because catch rates, order fills and other players usually make the real number lower. Only plans with no price-gap warning and at least 10k weekly volume.</p>
     <div class="card"><table id="worthtab">${head}<tbody>${f.worth.map(row).join("") || `<tr><td colspan="6" class="muted">None right now (needs ~${fmt(WORTH)}/hr realistic).</td></tr>`}</tbody></table></div>
 
     ${f.border.length ? `<details class="section"${u.borderline ? " open" : ""} id="borderBox"><summary><b>Borderline</b> <span class="muted">(${f.border.length}): ${fmt(BORDER)}–${fmt(WORTH)}/hr realistic. Only if the top plans' prices drop.</span></summary>
