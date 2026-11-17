@@ -349,6 +349,17 @@ div.mtop{margin:0 0 12px;padding:10px 14px;border-left:3px solid var(--good);bac
 const API = "https://api.hypixel.net/v2";
 const RARITIES = ["COMMON","UNCOMMON","RARE","EPIC","LEGENDARY","MYTHIC","DIVINE","SPECIAL","VERY_SPECIAL","SUPREME"];
 const MP = {COMMON:3,UNCOMMON:5,RARE:8,EPIC:12,LEGENDARY:16,MYTHIC:22,DIVINE:22,SPECIAL:3,VERY_SPECIAL:5,SUPREME:22};
+// 0.27.3: Magic Find applies to every drop (over 100% gives a chance at double), capped at 500; Special and Very Special
+// accessories no longer give Accessory Power. Older versions keep the old rules.
+const MF_NEW = () => verGte(sbVersion(), "0.27.3");
+const MF_CAP = () => MF_NEW() ? 500 : 900;
+function applyVersionRules(){ const n = MF_NEW(); MP.SPECIAL = n ? 0 : 3; MP.VERY_SPECIAL = n ? 0 : 5; }
+// a drop's chance with Magic Find (as expected drops per roll: above 1 means a chance at extra)
+function mfP(p, mf){
+  const m = 1 + Math.min(+mf || 0, MF_CAP()) / 100;
+  if (MF_NEW()) return p * m;
+  return p < 1 && p < 0.05 ? Math.min(1, p * m) : p;
+}
 const STAGES = ["STARTER","AMATEUR","SKILLED","INTERMEDIATE","EXPERT","PROFESSIONAL","MASTER"];
 const AVG_SKILLS = ["FARMING","MINING","COMBAT","FORAGING","FISHING","ENCHANTING","ALCHEMY","TAMING","CARPENTRY","HUNTING"];
 const CATA_XP = [50,125,235,395,625,955,1425,2095,3045,4385,6275,8940,12700,17960,25340,35640,50040,70040,97640,135640,188140,259640,356640,488640,668640,911640,1239640,1684640,2284640,3084640,4149640,5559640,7459640,9959640,13259640,17559640,23159640,30359640,39559640,51559640,66559640,85559640,109559640,139559640,177559640,225559640,285559640,360559640,453559640,569809640];
@@ -422,9 +433,20 @@ const idb = (() => {
   return {get: k => run("readonly", s => s.get(k)).catch(() => undefined), set: (k, v) => run("readwrite", s => s.put(v, k)).catch(e => console.warn("cache", e))};
 })();
 // keyless game data: reuse a copy younger than maxAge, else fetch; if fetching fails, fall back to any saved copy
+// When Hypixel's API reports a new SkyBlock version, everything cached before it is out of date (drop tables, prices,
+// recipes). For 3 days after, wiki pages are refetched every 6 hours while editors catch up.
+const dataEpoch = () => +store.get("dataEpoch", 0);
+function noteGameVersion(v){
+  if (!v) return;
+  const old = store.get("sbVersion", "");
+  if (old !== v){ store.set("sbVersion", v); store.set("dataEpoch", Date.now()); }   // first run of this check too: copies saved before it may predate the update
+}
+const verGte = (a, b) => { const x = String(a || "0").split(".").map(Number), y = String(b).split(".").map(Number); for (let i = 0; i < Math.max(x.length, y.length); i++){ if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return true; };
+const sbVersion = () => store.get("sbVersion", "");
 async function cachedJSON(url, maxAge){
-  const c = await idb.get("url:" + url);
-  if (c && Date.now() - c.t < maxAge) return c.j;
+  const c = await idb.get("url:" + url), ep = dataEpoch();
+  if (ep && Date.now() - ep < 3 * 86400e3 && /wiki/.test(url)) maxAge = Math.min(maxAge, 6 * 3600e3);
+  if (c && Date.now() - c.t < maxAge && c.t >= ep) return c.j;
   try { const j = await getJSON(url); idb.set("url:" + url, {t:Date.now(), j}); return j; }
   catch(e){ if (c){ console.warn("using saved copy of", url, e.message); return c.j; } throw e; }
 }
@@ -479,13 +501,15 @@ let RES = null;
 async function loadResources(){
   if (RES) return RES;
   status("Loading game data…");
+  try { noteGameVersion((await getJSON(API + "/resources/skyblock/skills")).version); } catch {}
+  applyVersionRules();
   const [items, skills, colls] = await Promise.all([
     cachedJSON(API + "/resources/skyblock/items", 6 * 3600e3),
     cachedJSON(API + "/resources/skyblock/skills", 6 * 3600e3),
     cachedJSON(API + "/resources/skyblock/collections", 6 * 3600e3),
   ]);
   const byId = {}; items.items.forEach(i => byId[i.id] = i);
-  RES = { items: items.items, byId, skills: skills.skills, collections: colls.collections };
+  RES = { items: items.items, byId, skills: skills.skills, collections: colls.collections, version:skills.version || sbVersion() };
   RES.museum = buildMuseumIndex(RES);
   RES.accessories = buildAccessoryIndex(RES);
   return RES;
@@ -806,7 +830,7 @@ function priorities(st, A){
   const accCheap = A.acc.missing.slice().sort((a,b) => RARITIES.indexOf(a.first.tier) - RARITIES.indexOf(b.first.tier) || b.gainFirst - a.gainFirst).slice(0,3);
   const upBest = A.acc.upgrades.slice().sort((a,b) => b.gain - a.gain).slice(0,2);
   areas.push({key:"acc", name:"Accessories", pct:A.acc.pct, tips:[
-    `About <b>${A.acc.mp}</b> magical power from ${A.acc.ownedFamilies} accessory families (of ${A.acc.families}).`,
+    `About <b>${A.acc.mp}</b> accessory power from ${A.acc.ownedFamilies} accessory families (of ${A.acc.families}).`,
     accCheap.length && `Cheap new accessories to pick up: ${accCheap.map(a => ilink(a.first.id, rar(a.first.tier, a.first.name))).join(", ")}.`,
     upBest.length && `Best upgrades: ${upBest.map(u => `${ilink(u.from.id, esc(u.from.name))} → ${ilink(u.to.id, rar(u.to.tier, u.to.name))} (+${u.gain} MP)`).join("; ")}.`,
     A.acc.unrecombed.length > 5 && `${A.acc.unrecombed.length} accessories aren't recombobulated — recombs on your highest-rarity ones give the most MP.`,
@@ -862,7 +886,7 @@ const FAILED = new Set();  // recipe files that couldn't be downloaded this sess
 async function fetchNeu(id){
   if (NEU[id]) return NEU[id];
   const cached = store.get("neu2:" + id);
-  if (cached && Date.now() - cached.t < WEEK) return NEU[id] = cached.d;
+  if (cached && Date.now() - cached.t < WEEK && cached.t >= dataEpoch()) return NEU[id] = cached.d;
   for (let attempt = 0; attempt < 3; attempt++){
     try {
       const r = await fetch(NEU_BASE + "items/" + encodeURIComponent(neuFile(id)) + ".json");
@@ -881,7 +905,7 @@ async function pool(items, n, fn){
 async function loadNpcIndex(){
   if (NPC_IDX) return NPC_IDX;
   const cached = store.get("neu:npcidx");
-  if (cached && Date.now() - cached.t < WEEK) return NPC_IDX = cached.d;
+  if (cached && Date.now() - cached.t < WEEK && cached.t >= dataEpoch()) return NPC_IDX = cached.d;
   status("Loading NPC shops (first time only)…");
   const list = await getJSON("https://data.jsdelivr.com/v1/packages/gh/NotEnoughUpdates/NotEnoughUpdates-REPO@master?structure=flat");
   const files = list.files.map(f => f.name).filter(n => /^\/items\/[^/]+_NPC\.json$/.test(n));
@@ -1734,7 +1758,7 @@ const SHARD_GOALS = [
    picks:[["Cinderbat","high","Magic Find everywhere"],["Daemon","high","RNG Meter fills faster"],["Golden Ghoul","medium","Coins on every kill"],["Hideondra","medium","Extra Kuudra Teeth"],
      ["Inferno Koi","medium","Better odds of a Vanquisher"],["Abyssal Lanternfish","medium","More Golden and Diamond Goblins"],["Lava Flame","medium","Magic Find on Magmatic mobs (Crimson Isle)"]]},
   {id:"qol", name:"Accessories & QoL",
-   tip:"Hideonring adds Accessory Bag slots, so it directly lets you hold more accessories and get more Magical Power.",
+   tip:"Hideonring adds Accessory Bag slots, so it directly lets you hold more accessories and get more Accessory Power.",
    picks:[["Hideonring","high","Up to +10 Accessory Bag slots"],["Hideonbox","high","Up to +10 Tuning Points"],["Hideonsack","medium","Sacks hold up to 10% more"],["Obsidian Defender","medium","Speed"],["Joydive","low","Respiration"]]},
 ];
 const PRIO = {high:"Guide pick", medium:"Good", low:"Low"};
@@ -1977,7 +2001,17 @@ function mwSlayer(t){
   const cost = [1, 2, 3, 4, 5].map(n => { const m = t.match(new RegExp(`\\|\\s*slayer_cost${n === 1 ? "" : n}\\s*=\\s*([\\d,]+)`)); return m ? +m[1].replace(/,/g, "") : null; });
   const drops = t.slice(Math.max(0, t.search(/==\s*Drops\s*==/i)));
   const tiers = [];
-  if (drops.includes("Slayer Drops Row")){            // 1) wiki calculator rows with weights (Revenant Horror)
+  if (drops.includes("Mob Drops Row") && /\|-\|\s*Tier\s*\d+\s*=/.test(drops)){   // 0) since 0.27.3: a mob drops table per tier, flat chances
+    for (const part of drops.split(/\|-\|\s*Tier\s*/).slice(1)){
+      const n = parseInt(part), mob = mwMob(part); if (!n || !mob) continue;
+      const rows = mob.rows.map(r => {
+        const blk = part.slice(part.indexOf(`|drop = ${r.item}`)).split("}}")[0], req = (blk.match(/\|\s*requirement\s*=\s*[^\n]*?(\d+)\s*$/m) || [])[1];
+        const book = r.item.match(/^Enchanted Book\s*&([^&]+)&/);
+        return {item:book ? `Enchanted Book (${book[1].trim()})` : r.item.replace(/&/g, "").trim(), qty:mwCount(r.cnt), lvl:+req || 0, p:mwChanceStr(r.chance)};
+      }).filter(r => r.p > 0);
+      tiers.push({tier:n, cost:cost[n - 1], rows});
+    }
+  } else if (drops.includes("Slayer Drops Row")){            // 1) wiki calculator rows with weights (Revenant Horror)
     for (const part of drops.split(/\|-\|\s*Tier\s+/).slice(1)){
       const n = ROMAN[(part.match(/^([IVX]+)/) || [])[1]]; if (!n) continue;
       const rows = [...part.split(/\|-\|/)[0].matchAll(/\{\{Slayer Drops Row([\s\S]*?)\}\}/g)].map(m => {
@@ -2017,11 +2051,13 @@ function mwSlayer(t){
   }
   return tiers;
 }
-// The wiki's own slayer drop maths (Module:Calculator): Token drops are guaranteed; Main and Extra roll by weight, and
-// Magic Find boosts drops under 5%; Separate (dyes) are a flat chance. Only drops your slayer level unlocks can roll.
+// The wiki's own slayer drop maths (Module:Calculator): Token drops are guaranteed; Main and Extra roll by weight;
+// Separate (dyes) are a flat chance. Only drops your slayer level unlocks can roll. Magic Find: before 0.27.3 it boosted
+// drops under 5% inside the weights; from 0.27.3 it multiplies every drop.
 function slayerOdds(rows, lvl, mf){
-  // pages that list ready-made chances: keep them, boost rare ones (<5%) by Magic Find the same way
-  if (rows.some(r => r.p != null)) return rows.filter(r => r.lvl <= lvl).map(r => ({item:r.item, qty:r.qty, p:r.p < 1 && r.p < 0.05 ? Math.min(1, r.p * (1 + mf / 100)) : r.p}));
+  // pages that list ready-made chances: keep them and apply Magic Find
+  if (rows.some(r => r.p != null)) return rows.filter(r => r.lvl <= lvl).map(r => ({item:r.item, qty:r.qty, p:mfP(r.p, mf)}));
+  if (MF_NEW() && +mf) return slayerOdds(rows, lvl, 0).map(r => ({...r, p:mfP(r.p, mf)}));   // base odds (no MF), then Magic Find on every drop
   const R = rows.filter(r => r.lvl <= lvl).map(r => ({...r, adj:r.w}));
   const sum = p => R.filter(r => r.pool === p).reduce((a, r) => a + r.adj, 0);
   const tok = sum("Token"), main0 = sum("Main"), extra0 = sum("Extra");
@@ -2417,7 +2453,7 @@ function mwMethods2(st, D2, P, S, mayor){
   const islOk = isl => { const I = ISLANDS.find(i => i.id === isl); return I ? !islandReq(st, I).locked : true; };
   const islName = isl => ISLANDS.find(i => i.id === isl)?.name || isl;
   const ff = S.ff !== "" && +S.ff >= 0 ? +S.ff : mwFarmFortune(st, "").total;
-  const mobValue = (name, ffx) => { const mob = D2.mobs[name]; if (!mob) return null; const d = drops(mwMobDrops(mob, ffx).map(r => r.p < 0.05 ? {...r, p:Math.min(1, r.p * (1 + (+S.mf || 0) / 100))} : r)); return {coins:mob.coins, drops:d, ev:mob.coins + d.reduce((a, x) => a + x.ev, 0)}; };
+  const mobValue = (name, ffx) => { const mob = D2.mobs[name]; if (!mob) return null; const d = drops(mwMobDrops(mob, ffx).map(r => ({...r, p:mfP(r.p, S.mf)}))); return {coins:mob.coins, drops:d, ev:mob.coins + d.reduce((a, x) => a + x.ev, 0)}; };
   const rate = (key, def) => { const v = +S[key]; return v > 0 ? v : def; };
   // fishing: sea creatures you can catch at your Fishing level, weighted by the wiki's catch shares
   const fishLvl = st.skills?.find(s => s.id === "FISHING")?.level || 0, scph = rate("scph", PR.scph);
@@ -2587,7 +2623,7 @@ function mwMethods3(st, D2, P, S, shards){
   }
   // Hotspot fishing: a share of sea creatures become Hotspot creatures (15% base, up to 85% with tonic, hook, bait and a Mythic Hermit Crab)
   const fishLvl = st.skills?.find(s => s.id === "FISHING")?.level || 0, scph = rate("scph", PR.scph), hotShare = Math.min(85, rate("hotspot", PR.hotspot)) / 100;
-  const mobEv = name => { const mob = D2.mobs[name]; if (!mob) return null; const d = drops(mwMobDrops(mob).map(r => r.p < 0.05 ? {...r, p:Math.min(1, r.p * (1 + (+S.mf || 0) / 100))} : r)); return {coins:mob.coins, ev:mob.coins + d.reduce((a, x) => a + x.ev, 0)}; };
+  const mobEv = name => { const mob = D2.mobs[name]; if (!mob) return null; const d = drops(mwMobDrops(mob).map(r => ({...r, p:mfP(r.p, S.mf)}))); return {coins:mob.coins, ev:mob.coins + d.reduce((a, x) => a + x.ev, 0)}; };
   for (const [isl, title, lava] of [["hub", "Hotspot fishing: Hub water", false], ["bayou", "Hotspot fishing: Backwater Bayou", false], ["lotus", "Hotspot fishing: Lotus Atoll", false], ["crimson", "Hotspot fishing: Crimson Isle lava", true]]){
     const reg = (MAP_EXTRA[isl]?.sea || []).map(([n, , lvl, ch]) => ({n, lvl, w:parseFloat(ch) || 0})).filter(s => s.w > 0 && s.lvl <= Math.max(fishLvl, 1) && D2.mobs[s.n]);
     const hot = (D2.hotspot || []).filter(h => h.lava === lava && h.lvl <= Math.max(fishLvl, 1) && D2.mobs[h.name]).map(h => ({n:h.name, w:h.w}));
@@ -3862,7 +3898,7 @@ const SLAYER_INFO = {
   wolf:    {short:"Sven", mob:"Wolf", tierXp:[5,25,100,500], area:"Hub Ruins & Howling Cave (Park)", tip:"Red Claw accessories, Mana Flux and Overflux Power Orbs (level 6–7) are the big unlocks, and Sven boosts pet and combat XP perks."},
   enderman:{short:"Voidgloom", mob:"Ender", tierXp:[5,25,100,500], area:"The End: Bruiser Hideout & Void Sepulture", tip:"Most important slayer for mid-game: Soulflow, Handy Blood Chalice, Atomsplit Katana, Juju and Terminator all need it."},
   blaze:   {short:"Inferno", mob:"Infernal", tierXp:[5,25,100,500], area:"Crimson Isle: Smoldering Tomb & Stronghold", tip:"Needed for the Inferno daggers, Burststopper accessories and the Destruction / Annihilation Cloak."},
-  vampire: {short:"Riftstalker", mob:"Vampire", tierXp:[10,25,60,120,150], area:"The Rift: Stillgore Château", tip:"Short and quick: 5 levels. Gives the Vampire Dentist Relic and the garlic gummy bear accessory, both Magical Power."},
+  vampire: {short:"Riftstalker", mob:"Vampire", tierXp:[10,25,60,120,150], area:"The Rift: Stillgore Château", tip:"Short and quick: 5 levels. Gives the Vampire Dentist Relic and the garlic gummy bear accessory, both Accessory Power."},
 };
 // Shards tied to slayers: [name, why]. "all" helps against every boss.
 const SLAYER_SHARDS = {
@@ -4783,7 +4819,7 @@ function viewUpgrades(st){
       ${line("Fairy Souls", fs != null ? `${fs}/289` : notFound(), "Exchange them with Tia, 5 at a time, for stats and SkyBlock XP", fs != null ? pct(fs, 289) : null)}
       ${line("Minion slots", `${slotsFromCrafts}${cu.minion_slots ? ` +${cu.minion_slots}` : ""}`, `${crafted} unique minion crafts${nextSlot ? ` · ${nextSlot[0] - crafted} more for slot ${nextSlot[1]}` : ""}${cu.minion_slots ? " · + Community Shop slots" : ""}`, nextSlot ? pct(crafted, nextSlot[0]) : 100)}
       ${line("Accessory bag upgrades", bag.bag_upgrades_purchased != null ? bag.bag_upgrades_purchased : notFound(), "Bought with Redstone collection / coins at Jacobus", null)}
-      ${line("Highest Magical Power", bag.highest_magical_power != null ? fmt(bag.highest_magical_power) : notFound(), "Unlocks Accessory Powers and Tuning Points", null)}
+      ${line("Highest Accessory Power", bag.highest_magical_power != null ? fmt(bag.highest_magical_power) : notFound(), "Unlocks Accessory Powers and Tuning Points", null)}
       ${line("Personal bank", me.profile?.bank_account != null ? prettyKey(me.profile.bank_account) : st.bank != null ? fmt(st.bank) + " coins" : notFound(), "Bank upgrades raise the interest cap", null)}
       ${line("Abiphone contacts", Array.isArray(abi) ? abi.length : notFound(), "Each contact is SkyBlock XP and some give perks", null)}
       ${line("Harp songs", Object.keys(harp).length ? songs.length : notFound(), "Melody's Harp: each song gives Intelligence and XP", null)}
@@ -5080,7 +5116,7 @@ function sbxpSources(st, A){
   row("Core", "Museum donations", A.museum.xpHave, 3650, "museum", "the donation XP of each item");
   const fs = dig(me, "fairy_soul.total_collected") ?? me.fairy_souls_collected;
   if (fs != null) row("Core", "Fairy Souls", Math.floor(fs / 5) * 10, 570, "map", "10 XP per 5 souls exchanged with Tia");
-  row("Core", "Magical Power", A.acc.mp, 2184, "acc", "1 XP per Magical Power");
+  row("Core", "Accessory Power", A.acc.mp, 2184, "acc", "1 XP per Accessory Power");
   if ((st.pets || []).length) row("Core", "Pet Score", petData(st).score * 3, 1554, "pets", "3 XP per Pet Score point");
   row("Core", "Collections", A.coll.tiers * 4, 3172, "coll", "4 XP per collection tier");
   const MXP = [1,1,1,1,1,1,2,3,4,6,12,24];
@@ -5301,7 +5337,7 @@ function filterTable(inp){
   t.querySelectorAll("tbody tr, .tile").forEach(r => r.style.display = r.textContent.toLowerCase().includes(q) ? "" : "none");
 }
 
-const STAT_GO = [[/^skyblock level/i,"sblevel"],[/^forge$/i,"mining"],[/^faction|^dojo/i,"crimson"],[/^museum/i,"museum"],[/magical power/i,"acc"],[/^collections$|tiers unlocked/i,"coll"],[/^catacombs/i,"combat"],[/skill average/i,"skills"],[/pet score|unique pets/i,"pets"],[/fairy souls/i,"map"],[/minion slots|unique crafts/i,"minions"],[/bestiary milestone/i,"bestiary"],[/garden level/i,"garden"],[/^trophy fish/i,"fishing"],[/^heart of the forest/i,"foraging"],[/heart of the mountain/i,"mining"]];
+const STAT_GO = [[/^skyblock level/i,"sblevel"],[/^forge$/i,"mining"],[/^faction|^dojo/i,"crimson"],[/^museum/i,"museum"],[/magical power|accessory power/i,"acc"],[/^collections$|tiers unlocked/i,"coll"],[/^catacombs/i,"combat"],[/skill average/i,"skills"],[/pet score|unique pets/i,"pets"],[/fairy souls/i,"map"],[/minion slots|unique crafts/i,"minions"],[/bestiary milestone/i,"bestiary"],[/garden level/i,"garden"],[/^trophy fish/i,"fishing"],[/^heart of the forest/i,"foraging"],[/heart of the mountain/i,"mining"]];
 function statCard(title, big, sub, p){
   const [ic, t] = splitIcon(title), plain = String(t).replace(/<[^>]*>/g, "").trim(), go = (STAT_GO.find(([re]) => re.test(plain)) || [])[1];
   const jump = go && go !== tab ? ` clk" data-go="${go}" title="Open ${esc(plain)}` : "";
@@ -5314,7 +5350,7 @@ function viewFocus(st, A){
     ${statCard("SkyBlock level", Math.floor(st.sbLevel) + deltaOf("sbLevel",2), `${Math.round((st.sbLevel%1)*100)}/100 XP to next`, (st.sbLevel%1)*100)}
     ${statCard("Skill average", A.skillAvg.toFixed(2) + deltaOf("skillAvg",2), `${A.skillPct}% of max skill levels`, A.skillPct)}
     ${statCard("Museum", `${A.museum.have}/${A.museum.total}` + deltaOf("museum"), `${A.museum.pct}% donated`, A.museum.pct)}
-    ${statCard("Magical power", A.acc.mp + deltaOf("mp"), `${A.acc.ownedFamilies}/${A.acc.families} accessory families${st.mpReported ? ` · in-game best: ${st.mpReported}` : ""}`, A.acc.pct)}
+    ${statCard("Accessory power", A.acc.mp + deltaOf("mp"), `${A.acc.ownedFamilies}/${A.acc.families} accessory families${st.mpReported ? ` · in-game best: ${st.mpReported}` : ""}`, A.acc.pct)}
     ${statCard("Collections", `${A.coll.tiers}/${A.coll.max}` + deltaOf("collTiers"), `${A.coll.maxed} maxed · ${A.coll.unlocked}/${A.coll.count} started`, A.coll.pct)}
     ${statCard("Catacombs", st.cata.level + deltaOf("cata",2), `Slayers ${A.slayerPct}% complete`, A.cataPct)}
     ${forgeCard(st)}
@@ -5341,15 +5377,15 @@ const mktPrice = id => PRICES ? (PRICES.bz[id] || PRICES.bin[id] || null) : null
 
 const MP_MILESTONES = [[100,"First big stat jump from your Accessory Power"],[250,"Noticeably more damage, health and Intelligence"],[500,"Guides say to start using Enrichments around 500–750 MP"],[750,"Strong mid-game. Good time for Enrichments"],[900,"Roughly what guides suggest for Kuudra"],[1000,"Guides suggest ~1000 MP for Ghost grinding and later content"]];
 function accGuideHTML(st, C, part){
-  const tips = `<details class="card small"><summary><b>How guides say to build Magical Power</b></summary><ul>
+  const tips = `<details class="card small"><summary><b>How guides say to build Accessory Power</b></summary><ul>
     <li><b>Buy missing accessories before upgrading the ones you have.</b> A new family is usually much cheaper per MP than the next tier of one you own.</li>
     <li><b>Rank purchases by coins per MP</b>, not by how good an accessory looks. Prices change, so the list below uses live Bazaar and lowest BIN prices.</li>
     <li><b>Get the cheap ones first:</b> everything sold by Hub NPCs, then the free race accessories, then the cheapest per MP.</li>
     <li><b>Only the best accessory in each family counts</b>, so don't keep lower tiers in your bag (e.g. Scarf's Thesis and Scarf's Grimoire).</li>
     <li><b>Recombobulate once new accessories get expensive.</b> Start with accessories that are already Legendary or Epic (+6 and +4 MP), then Rare.</li>
     <li><b>Pick the Accessory Power that fits your build</b>: guides mention Silky or Bloody for melee and Sighted for mage.</li>
-    <li><b>More bag slots:</b> max the Redstone collection, Jacobus upgrades, the Community Shop, and the Hideonring shard (Accessory Size).</li>
-    <li><b>Hegemony Artifact counts double</b> in the bag. <b>Enrichments</b> are for fine-tuning once you have about 500–750+ MP.</li></ul></details>`;
+    <li><b>More bag slots:</b> max the Redstone collection, Jacobus upgrades (since 0.27.3 each costs at most 10M, about 870M in total, and everyone got 9 free slots), the Community Shop, and the Hideonring shard (Accessory Size).</li>
+    <li><b>Hegemony Artifact counts double</b> in the bag. <b>Enrichments</b> now give +1 Tuning Point each instead of a fixed stat (0.27.3). Special and Very Special accessories no longer give Accessory Power.</li></ul></details>`;
   const ms = MP_MILESTONES.map(([n, t]) => `<tr><td>${C.mp >= n ? '<span class="good">✓</span>' : ""} <b>${n} MP</b></td><td class="small">${esc(t)}</td><td class="muted small">${C.mp >= n ? "reached" : (n - C.mp) + " MP to go"}</td></tr>`).join("");
   if (part === "tips") return `<div class="card"><table><thead><tr><th>MP milestone</th><th>Why it matters</th><th></th></tr></thead><tbody>${ms}</tbody></table></div><div style="margin-top:10px">${tips.replace("<details ", "<details open ")}</div>`;
   if (!needPrices("acc")) return `<div class="muted">Loading prices…</div>`;
@@ -5456,7 +5492,7 @@ function viewAcc(st, A){
     ${miss.map(m => `<tr><td>${ilink(m.first.id, rar(m.first.tier, m.first.name))}<div>${acts([m.first.id], m.first.name)}</div></td><td>${m.gainFirst}</td><td>${m.size > 1 ? rar(m.top.tier, m.top.name) + `<div>${acts([m.top.id], m.top.name)}</div>` : '<span class="muted">—</span>'}</td><td>${m.size > 1 ? m.gainTop : ""}</td></tr>`).join("")}
     </tbody></table></div>`;
   return `<div class="grid compact">
-    ${statCard("Magical power (est.)", C.mp, `${C.mpExtra?.length ? "incl. " + C.mpExtra.map(([n, v]) => `${n} +${v}`).join(", ") + ". " : ""}${st.mpReported ? `In-game best: ${st.mpReported}` : "Enrichments not counted"}`, null)}
+    ${statCard("Accessory power (est.)", C.mp, `${C.mpExtra?.length ? "incl. " + C.mpExtra.map(([n, v]) => `${n} +${v}`).join(", ") + ". " : ""}${st.mpReported ? `In-game best: ${st.mpReported}` : "Enrichments not counted"}`, null)}
     ${statCard("Families owned", `${C.ownedFamilies}/${C.families}`, `${C.pct}%`, C.pct)}
     ${statCard("Upgrades available", ups.length, `+${ups.reduce((a,u)=>a+u.gain,0)} MP if all upgraded one step`, null)}
     ${statCard("Not recombobulated", C.unrecombed.length, "each recomb = one rarity higher", null)}
@@ -5536,7 +5572,7 @@ const PET_TIERS = ["COMMON","UNCOMMON","RARE","EPIC","LEGENDARY","MYTHIC"];
 const RARE_TITLE = {MINING:"⛏ Rare mining mobs", FISHING:"🎣 Rare sea creatures", COMBAT:"⚔ Bosses & rare mobs", FARMING:"🐛 Garden pests"};
 // ---------- drop chances with your Magic Find and Pet Luck ----------
 // Wiki (Magic Find): chance = base × (1 + MF/100), pets: base × (1 + (MF + Pet Luck)/100),
-// and only for drops whose base chance is below 5%. Taming gives +1 Pet Luck per level.
+// before 0.27.3 only for drops whose base chance is below 5%; from 0.27.3 for every drop (MF capped at 500). Taming gives +1 Pet Luck per level.
 function dropStats(st){
   const taming = st.skills.find(s => s.id === "TAMING")?.level || 0;
   const petMF = (st.pets || []).length ? petData(st).mf : 0;
@@ -5544,8 +5580,8 @@ function dropStats(st){
 }
 function dropChance(st, base, pet, mfOk = true){
   const {mf, pl} = dropStats(st);
-  const boosted = mfOk && base < 0.05;
-  return boosted ? Math.min(1, base * (1 + (mf + (pet ? pl : 0)) / 100)) : base;
+  const boosted = mfOk && (MF_NEW() || base < 0.05);
+  return boosted ? Math.min(1, base * (1 + (Math.min(mf, MF_CAP()) + (pet ? pl : 0)) / 100)) : base;
 }
 const pctTxt = p => p >= 0.01 ? (p * 100).toFixed(p >= 0.1 ? 0 : 1) + "%" : p >= 0.0001 ? (p * 100).toFixed(3).replace(/0+$/, "") + "%" : (p * 100).toPrecision(2) + "%";
 const oneIn = p => p > 0 ? `1 in ${fmt(Math.round(1 / p))}` : "—";
@@ -5553,7 +5589,7 @@ const oneIn = p => p > 0 ? `1 in ${fmt(Math.round(1 / p))}` : "—";
 function dropLine(st, name, base, opts = {}){
   const eff = dropChance(st, base, opts.pet, opts.mf !== false);
   const by = opts.tries != null ? 1 - Math.pow(1 - eff, opts.tries) : null;
-  return `<div class="dropline"><b>${esc(name)}</b> <span class="muted">${pctTxt(base)}</span>${eff !== base ? ` → <span class="good">${pctTxt(eff)}</span>` : opts.mf === false ? ' <span class="muted">(not boosted by MF)</span>' : base >= 0.05 ? ' <span class="muted">(≥5%, no MF)</span>' : ""}
+  return `<div class="dropline"><b>${esc(name)}</b> <span class="muted">${pctTxt(base)}</span>${eff !== base ? ` → <span class="good">${pctTxt(eff)}</span>` : opts.mf === false ? ' <span class="muted">(not boosted by MF)</span>' : base >= 0.05 && !MF_NEW() ? ' <span class="muted">(≥5%, no MF)</span>' : ""}
     <span class="muted">· ${oneIn(eff)}</span>${by != null && opts.tries > 0 ? ` · <span title="Chance of at least one drop in your ${fmt(opts.tries)} kills">${pctTxt(by)} by your kills</span>` : ""}</div>`;
 }
 // the shared Magic Find / Pet Luck inputs (same values everywhere, saved in this browser)
@@ -5561,7 +5597,7 @@ function dropControls(st){
   const d = dropStats(st);
   return `<div class="toolbar dropctl"><label class="chk">✨ Magic Find <input type="number" class="dropMF" min="0" max="2000" value="${d.mf}" style="width:70px"></label>
     <label class="chk">🍀 Pet Luck <input type="number" class="dropPL" min="0" max="500" value="${d.pl}" style="width:70px"></label>
-    <span class="muted small">Your total from the stats menu. Defaults: Pet Luck = Taming level (${d.taming}), Magic Find = Pet Score bonus (+${d.petMF}). Formula from the wiki: base × (1 + MF/100), pets also add Pet Luck; only drops under 5% are boosted.</span></div>`;
+    <span class="muted small">Your total from the stats menu. Defaults: Pet Luck = Taming level (${d.taming}), Magic Find = Pet Score bonus (+${d.petMF}). Formula from the wiki: base × (1 + MF/100), pets also add Pet Luck; ${MF_NEW() ? "since 0.27.3 every drop is boosted (Magic Find counts up to 500)" : "only drops under 5% are boosted"}.</span></div>`;
 }
 document.addEventListener("change", e => {
   const t = e.target;
