@@ -2351,6 +2351,114 @@ function mwCraftRows(P, S, capital, st){
   return out.filter(f => !(S.only !== false && f.locked)).sort((a, b) => b.hour - a.hour || b.profit - a.profit).slice(0, 40);
 }
 
+// ---------- craft flips as one budget plan ----------
+// Same idea as the shard budget plan: coins go a little at a time to whichever craft's next batch returns the most
+// per coin, divided by how long it takes to fill (instant buying and selling is immediate; orders and offers take
+// time). Buying more of an ingredient walks up its order book, selling more of a result walks down its buy orders,
+// and crafts that use the same ingredient share it. Each item is capped at your share of a day's trading.
+function bookWalk(book, from, n, fallback){
+  let skip = from, left = n, v = 0;
+  for (const [p, k] of book || []){ const avail = Math.max(0, k - skip); skip = Math.max(0, skip - k); const t = Math.min(left, avail); v += t * p; left -= t; if (left <= 0) break; }
+  const thin = left > 0; if (thin) v += left * ((book || []).at(-1)?.[0] || fallback || 0);
+  return {v, thin};
+}
+// the best recipe for each craftable Bazaar item (by return per coin at the top of the books)
+function mwCraftOpts(P, S, st){
+  const best = {}, tax = 1 - S.tax / 100, instant = S.mode !== "offer";
+  for (const id of MW.craft || []){
+    const b = P.bz[id]; if (!b) continue;
+    const sellPx = instant ? b.bid : (b.ask || b.bid); if (!sellPx) continue;
+    if (S.only !== false && !mwCraftReq(id, st).ok) continue;
+    const wide = x => !instant && !(x.bid > 0 && x.ask <= 2 * x.bid);   // with orders: a gap over 2× means the price isn't real
+    if (wide(b)) continue;
+    for (const r of NEU[id]?.recipes || []){
+      if (r.type !== "craft" || !r.inputs.every(([i]) => P.bz[i]) || r.inputs.some(([i]) => i === id) || r.inputs.some(([i]) => wide(P.bz[i]))) continue;
+      const need = {}; for (const [i, n] of r.inputs) need[i] = (need[i] || 0) + n;
+      const unit = Object.entries(need).reduce((a, [i, n]) => a + n * (mwBuy(i, P, S) || Infinity), 0), per = sellPx * tax * r.out - unit;
+      if (!(per > 0) || !isFinite(unit)) continue;
+      if (!best[id] || per / unit > best[id].per / best[id].unit) best[id] = {id, out:r.out, need, unit, per};
+    }
+  }
+  return Object.values(best).sort((a, b) => b.per / b.unit - a.per / a.unit);
+}
+function mwCraftPlan(P, S, opts, budget, capped = true, shareAll){
+  const instant = S.mode !== "offer", tax = 1 - S.tax / 100, share = shareAll || Math.max(0.005, (+S.share || 5) / 100);
+  const used = {}, sold = {}, perHr = (id, side) => (P.bz[id]?.[side] || 0) / 168;
+  const inSide = instant ? "askVol" : "bidVol", outSide = instant ? "bidVol" : "askVol";
+  const O = opts.map(o => ({...o, runs:0, cost:0, rev:0, thin:false}));
+  const costOf = (o, k) => { let v = 0, thin = false; for (const [i, n] of Object.entries(o.need)){ const b = P.bz[i];
+    if (instant){ const x = bookWalk(b.askBook, used[i] || 0, n * k, b.ask); v += x.v; thin ||= x.thin; } else v += n * k * (b.bid || b.ask); } return {v, thin}; };
+  const revOf = (o, k) => { const b = P.bz[o.id];
+    if (instant){ const x = bookWalk(b.bidBook, sold[o.id] || 0, o.out * k, b.bid); return {v:x.v * tax, thin:x.thin}; } return {v:o.out * k * (b.ask || b.bid) * tax, thin:false}; };
+  const depth = book => (book || []).reduce((a, [, k]) => a + k, 0);
+  const room = o => {
+    if (instant){
+      let m = (depth(P.bz[o.id].bidBook) - (sold[o.id] || 0)) / o.out;
+      for (const [i, n] of Object.entries(o.need)) m = Math.min(m, (depth(P.bz[i].askBook) - (used[i] || 0)) / n);
+      return Math.floor(m);
+    }
+    if (!capped) return 1e7;
+    let m = perHr(o.id, outSide) * 24 * share / o.out - o.runs;
+    for (const [i, n] of Object.entries(o.need)) m = Math.min(m, (perHr(i, inSide) * 24 * share - (used[i] || 0)) / n);
+    return Math.floor(m); };
+  // hours until orders fill and offers sell (instant: none)
+  const hoursOf = (o, runs) => instant ? 0 : Math.max(runs * o.out / Math.max(1e-9, perHr(o.id, outSide)), ...Object.entries(o.need).map(([i, n]) => ((used[i] || 0) + n * runs) / Math.max(1e-9, perHr(i, inSide))));
+  const step = instant ? Math.min(budget / 40, 1e6) : budget / 40; let left = budget;
+  for (let guard = 0; guard < 2000 && left > 0; guard++){
+    let best = null;
+    for (const o of O){
+      let add = Math.min(Math.max(1, Math.round(step / o.unit)), room(o)); if (add < 1) continue;
+      let c = costOf(o, add);
+      if (c.v > left){ add = Math.floor(add * left / c.v); if (add < 1) continue; c = costOf(o, add); if (c.v > left) continue; }
+      let r = revOf(o, add);
+      // a big batch can walk off the end of the order books; try smaller ones before giving up on this craft
+      for (let k = 0; k < 10 && add > 1 && r.v - c.v < 0.02 * c.v; k++){ add = Math.floor(add / 2); c = costOf(o, add); r = revOf(o, add); }
+      const gain = r.v - c.v;
+      if (gain < 0.02 * c.v) continue;   // under 2% back: not worth the coins
+      const score = gain / c.v / Math.max(0.25, hoursOf(o, o.runs + add) / 24);
+      if (!best || score > best.score) best = {o, add, c, r, score};
+    }
+    if (!best) break;
+    const {o, add, c, r} = best;
+    for (const [i, n] of Object.entries(o.need)) used[i] = (used[i] || 0) + n * add;
+    sold[o.id] = (sold[o.id] || 0) + o.out * add;
+    o.runs += add; o.cost += c.v; o.rev += r.v; o.thin ||= c.thin || r.thin; left -= c.v;
+  }
+  const spentAll = budget - left;
+  for (const o of O) if (capped && !shareAll && o.runs && o.cost < spentAll * 0.01){ left += o.cost; o.runs = 0; }   // crumbs
+  const picks = O.filter(o => o.runs).map(o => ({...o, profit:o.rev - o.cost, hours:hoursOf(o, o.runs)})).sort((a, b) => b.cost - a.cost);
+  return {picks, spent:budget - left, left, profit:picks.reduce((a, x) => a + x.profit, 0), hours:Math.max(0, ...picks.map(x => x.hours))};
+}
+function mwCraftPlanHTML(P, S, capital, st){
+  const budget = parseCoins(S.cbudget) || capital; if (!(budget > 0)) return "";
+  const opts = mwCraftOpts(P, S, st); if (!opts.length) return "";
+  const plan = mwCraftPlan(P, S, opts, budget), instant = S.mode !== "offer", px = n => n >= 100 ? fmt(n) : n.toFixed(1);
+  const when = h => instant ? "instant" : "~" + hrsTxt(h);
+  const head = `<div class="mtool" style="margin:6px 0"><label>💰 Budget <input data-mset="cbudget" size="9" placeholder="${esc(fmt(capital))}" value="${esc(S.cbudget ?? "")}"></label><span class="small muted">empty uses your purse + bank</span></div>`;
+  if (!plan.picks.length) return head + `<div class="card"><b>💼 Your craft plan for ${fmt(budget)}</b> <span class="muted">· nothing makes 2% or more right now.</span></div>`;
+  const rows = plan.picks.map(o => `<tr><td><b>${(o.runs * o.out).toLocaleString("en-US")}× ${esc(mwName(o.id))}</b><div class="small muted">${o.runs.toLocaleString("en-US")} craft${o.runs === 1 ? "" : "s"}</div></td>
+      <td class="small">${Object.entries(o.need).map(([i, n]) => `${(n * o.runs).toLocaleString("en-US")}× ${esc(mwName(i))}`).join(" + ")}</td>
+      <td class="mnum">${fmt(o.cost)}<div class="small muted">${(o.cost / budget * 100).toFixed(0)}% of budget</div>${o.thin ? '<div class="small" style="color:var(--warn)">⚠ thin order book</div>' : ""}</td>
+      <td class="mnum"><b class="good">+${fmt(o.profit)}</b><div class="small muted">${(o.profit / Math.max(1, o.cost) * 100).toFixed(1)}% back</div></td>
+      <td class="mnum small">${when(o.hours)}</td></tr>`).join("");
+  // compare: everything in the single best craft
+  const solo = opts.slice(0, 15).map(o => instant ? mwCraftPlan(P, S, [o], budget, false) : mwCraftPlan(P, S, [o], budget, true, 1)).filter(x => x.picks.length).sort((a, b) => b.profit - a.profit)[0];
+  let cmp = "";
+  if (solo && plan.picks.length > 1){
+    const x = solo.picks[0], d = x.profit - plan.profit, slower = instant ? 1 : x.hours / Math.max(0.1, plan.hours);
+    const vs = Math.abs(d) < 0.05 * plan.profit ? "about the same" : d > 0 ? `${fmt(d)} more` : `${fmt(-d)} less`;
+    const ph = (p, h) => fmt(p / Math.max(0.25, h)) + "/hour";
+    cmp = `<div class="small" style="margin-top:6px">⚖ <b>All in one craft instead?</b> The best is ${(x.runs * x.out).toLocaleString("en-US")}× ${esc(mwName(x.id))}: spend ${fmt(x.cost)} → +${fmt(x.profit)} (${vs})${instant ? (x.thin ? ", deeper than its order books list" : "") : `, but it takes ${when(x.hours)} for the orders to fill and sell${slower >= 1.5 ? ` (${slower.toFixed(1)}× as long)` : ""}`}.
+      <span class="muted">${instant ? (solo.spent < budget * 0.9 ? `Past ${fmt(solo.spent)} its order books run out (or it stops making 2%), so the rest of your coins would sit unused.` : "Buying and selling that much of one item walks far into its order books, so each craft makes less.") : slower >= 1.5 ? `Even taking every trade in that item, orders that big take that long to fill and invite undercutting. Per hour of waiting the split makes ${ph(plan.profit, plan.hours)}, all in one ${ph(x.profit, x.hours)}, and it gets your coins back sooner to go again.` : "Here it barely matters which you pick."}</span></div>`;
+  }
+  const why = plan.left < budget * 0.03 ? "" : plan.spent < budget * 0.25 ? `<br><span style="color:var(--warn)">Only ${fmt(plan.spent)} of your ${fmt(budget)} can be used: ${instant ? "instant crafts only trade against the orders already listed, and those run out quickly. Switching to sell offers (top of the Money tab) usually uses far more." : "these markets are small at your share of them."}</span>` : `<br><span class="muted">${fmt(plan.left)} isn't used: more would mean ${instant ? "going past the orders listed right now" : `going past your ${S.share}% share of these markets`}, or making under 2% back.</span>`;
+  return head + `<div class="card best"><div class="muted small">💼 YOUR CRAFT PLAN FOR ${esc(fmt(budget))}${parseCoins(S.cbudget) ? "" : " (PURSE + BANK)"}</div>
+    <div style="font-size:16px;margin:4px 0">Craft and sell <b>${plan.picks.length} item${plan.picks.length === 1 ? "" : "s"}</b>: spend <b>${fmt(plan.spent)}</b> → <span class="good" style="font-weight:700">+${fmt(plan.profit)}</span>${instant ? "" : ` once the orders fill and sell (~${hrsTxt(plan.hours)})`}</div>
+    <p class="muted small" style="margin:0 0 8px">Coins go a little at a time to whichever craft returns the most per coin${instant ? "" : ", counting how long its orders take to fill"}. Buying more of an ingredient gets pricier as you go up its order book (and selling more gets cheaper), and crafts that use the same ingredient share it, so the money spreads over several crafts. ${instant ? "Instant trades only use the orders listed right now" : `Each item stays within your ${S.share}% share of a day's trading`}${instant ? "" : ", and items whose sell offers are over twice their buy orders are skipped (those orders rarely fill)"}.</p>
+    <table><thead><tr><th>Craft → sell</th><th>Buy</th><th class="mnum">Spend</th><th class="mnum">Profit</th><th class="mnum">Done in</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="small" style="margin-top:8px">${instant ? "Instant-buy the ingredients, craft, and instant-sell." : "Buy orders for the ingredients, craft, and sell offers for the results."}${why}</div>${cmp}</div>`;
+}
+
 // ---------- more ways to make coins: fishing, pests, Diana, mob grinding, minibosses, corpses, foraging, minions, the Forge, NPC flips ----------
 // Same idea as above: drop tables come live from the wiki (each mob's {{Mob Drops Table}}, the minion data module, burrow and corpse loot),
 // prices are live, and the only guesses are your rates, which you can change per method.
@@ -3033,7 +3141,7 @@ function mwFlipsHTML(flips, S, capital){
   return `<h4>💱 Bazaar flips</h4><p class="muted small">Put a buy order at the top bid, then a sell offer at the lowest ask (${S.tax}% tax). Coins/hour assumes ${share}, never more than your purse + bank (${fmt(capital)}). Prices move; check the spread before you commit.</p>${bz}
     ${mwNpcHTML(S)}
     ${CUR ? mwCofCraftsHTML(CUR.st, S) : ""}
-    <h4>🔨 Bazaar enchanting crafts</h4><p class="muted small">${S.mode === "offer" ? "Buy the ingredients with buy orders at the top bid, craft, and sell the result with a sell offer at the lowest ask (orders take time to fill)." : "Instant-buy the ingredients, craft, and instant-sell the result."} Prices are the real top of the order book, after ${S.tax}% tax${S.mode === "offer" ? "" : "; for the hourly amount, buying and selling that many is priced down the order book, so big batches earn less per craft"}. Coins/hour uses ${S.share}% of the result's and each ingredient's trading, never more than your purse + bank. Ingredients nobody is selling right now are skipped${S.only !== false ? ", and so are recipes your collections haven't unlocked" : ""}.</p>${craft}`;
+    <h4>🔨 Bazaar enchanting crafts</h4><p class="muted small">${S.mode === "offer" ? "Buy the ingredients with buy orders at the top bid, craft, and sell the result with a sell offer at the lowest ask (orders take time to fill)." : "Instant-buy the ingredients, craft, and instant-sell the result."} Prices are the real top of the order book, after ${S.tax}% tax${S.mode === "offer" ? "" : "; for the hourly amount, buying and selling that many is priced down the order book, so big batches earn less per craft"}. Coins/hour uses ${S.share}% of the result's and each ingredient's trading, never more than your purse + bank. Ingredients nobody is selling right now are skipped${S.only !== false ? ", and so are recipes your collections haven't unlocked" : ""}.</p>${cf ? mwCraftPlanHTML(MW.P, S, capital, CUR?.st) : ""}${craft}`;
 }
 function mwDetail(m){
   const S = mwSet(), tIn = m.time;
