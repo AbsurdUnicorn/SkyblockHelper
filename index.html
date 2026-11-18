@@ -2189,7 +2189,7 @@ const mwSet = () => ({...MW_DEF, ...store.get("money:set", {})});
 const SLAYER_MIN = [1.5, 2, 3, 4, 6];                 // default minutes per boss (incl. spawning) by tier: your speed, change it per boss
 const KUUDRA_MIN = [5, 5, 6, 7, 9];
 const FLOOR_MIN = {F1:5, F2:5, F3:6, F4:7, F5:7, F6:8, F7:12, M1:6, M2:6, M3:7, M4:8, M5:8, M6:10, M7:14};
-const mwTime = (key, def) => { const v = +store.get("money:t:" + key, 0); return v > 0 ? v : def; };
+const mwTime = (key, def) => { const v = +store.get("money:t:" + key, 0); return v > 0 ? v : (linkMeasured(key) || def); };   // yours, else measured by the game link, else the preset
 // wiki: The Garden → Crops (base drops per harvest, Garden level needed); enchanted form used when it sells better
 const MW_CROPS = [["Wheat", 1, "WHEAT", 1, "ENCHANTED_WHEAT", "WHEAT"], ["Carrot", 2, "CARROT_ITEM", 2.5, "ENCHANTED_CARROT", "CARROT_ITEM"], ["Potato", 3, "POTATO_ITEM", 2.5, "ENCHANTED_POTATO", "POTATO_ITEM"],
   ["Pumpkin", 4, "PUMPKIN", 1, "ENCHANTED_PUMPKIN", "PUMPKIN"], ["Sugar Cane", 5, "SUGAR_CANE", 2, "ENCHANTED_SUGAR", "SUGAR_CANE"], ["Melon", 6, "MELON", 5, "ENCHANTED_MELON", "MELON"],
@@ -2562,7 +2562,7 @@ function mwMethods2(st, D2, P, S, mayor){
   const islName = isl => ISLANDS.find(i => i.id === isl)?.name || isl;
   const ff = S.ff !== "" && +S.ff >= 0 ? +S.ff : mwFarmFortune(st, "").total;
   const mobValue = (name, ffx) => { const mob = D2.mobs[name]; if (!mob) return null; const d = drops(mwMobDrops(mob, ffx).map(r => ({...r, p:mfP(r.p, S.mf)}))); return {coins:mob.coins, drops:d, ev:mob.coins + d.reduce((a, x) => a + x.ev, 0)}; };
-  const rate = (key, def) => { const v = +S[key]; return v > 0 ? v : def; };
+  const rate = (key, def) => { const v = +S[key]; return v > 0 ? v : (linkMeasured(key) || def); };
   // fishing: sea creatures you can catch at your Fishing level, weighted by the wiki's catch shares
   const fishLvl = st.skills?.find(s => s.id === "FISHING")?.level || 0, scph = rate("scph", PR.scph);
   for (const [isl, title] of MW2_FISH){
@@ -2717,7 +2717,7 @@ function mwMethods3(st, D2, P, S, shards){
   const M = [], PR = mwPre(S), sell = id => mwSell(id, P, S), drops = list => mwDrops(list, P, S);
   const islOk = isl => { const I = ISLANDS.find(i => i.id === isl); return I ? !islandReq(st, I).locked : true; };
   const islName = isl => ISLANDS.find(i => i.id === isl)?.name || isl;
-  const rate = (key, def) => { const v = +S[key]; return v > 0 ? v : def; };
+  const rate = (key, def) => { const v = +S[key]; return v > 0 ? v : (linkMeasured(key) || def); };
   // shard hunting: SkyShards' typical shards per hour (before Hunting Fortune), times your Hunting Fortune
   const hf = +S.hf || 0;
   for (const s of shards?.list || []){
@@ -3102,7 +3102,7 @@ function viewMoney(st){
   }
   if (Date.now() - MW.t > 120e3 && !MW.loading) setTimeout(() => mwLoad(), 0);
   MW.motes = mwCurRank("SKYBLOCK_MOTE").map(x => ({...x, motes:x.cost, perMote:x.per}));
-  const S = mwSet(), M = [...mwMethods(st, MW.D, MW.P, S), ...(MW.D2 ? mwMethods2(st, MW.D2, MW.P, S, MW.mayor) : []), ...(MW.D2 ? mwMethods3(st, MW.D2, MW.P, S, MW.shards) : [])], capital = (st.purse || 0) + (st.bank || 0);
+  const S = mwSet(), M = [...mwMethods(st, MW.D, MW.P, S), ...(MW.D2 ? mwMethods2(st, MW.D2, MW.P, S, MW.mayor) : []), ...(MW.D2 ? mwMethods3(st, MW.D2, MW.P, S, MW.shards) : [])], capital = livePurse(st) + (st.bank || 0);
   MW.last = M;
   for (const m of M) mwFlagSlow(m, MW.P, S);
   const top = mwSort(M.filter(m => m.ok && m.hour > 0))[0];
@@ -3118,7 +3118,7 @@ function viewMoney(st){
     ${mwStatsHTML(st, S)}
     ${top ? `<div class="mtop clk" data-mm="${esc(top.key)}">🏆 Best for you right now: <b>${top.icon} ${esc(top.name)}</b> · <b class="good">${fmt(top.hour)}</b> coins/hour${top.task ? ` <span class="small muted">(players make ${fmt(top.task.coinsPerHour)})</span>` : ""}</div>` : ""}
     ${subTabs("money", [
-      {id:"methods", label:"📋 Methods", count:mwRows(st, M, S).filter(r => (S.only === false || r.ok) && ((r.mine ?? 0) > 0 || (r.real ?? 0) > 0)).length, html:mwMethodsHTML(st, M, S)},
+      {id:"methods", label:"📋 Methods", count:mwRows(st, M, S).filter(r => (S.only === false || r.ok) && ((r.mine ?? 0) > 0 || (r.real ?? 0) > 0)).length, html:linkMethodsNote() + mwMethodsHTML(st, M, S)},
       {id:"passive", label:"🤖 Passive income", html:`<h4>🤖 Minions</h4>${MW.D2 ? mwMinionsHTML(st, S) : ""}<h4>🔥 Forge</h4>${mwForgeHTML(st, S)}`},
       {id:"trading", label:"💱 Trading", html:mwFlipsHTML(flips, S, capital) + mwCurrencyHTML(S)},
     ])}
@@ -3157,7 +3157,7 @@ function mwDetail(m){
   const fort = m.fortune ? `<h4>Farming Fortune</h4><p class="small">${m.fortune.manual ? `Using the <b>${fmt(m.fortune.used)}</b> you entered.` : `Estimated <b>${fmt(m.fortune.total)}</b> from your profile: ${m.fortune.parts.map(([l, v]) => `${esc(l)} ${v}`).join(", ")}. Gear, pets and accessories add more: enter your real total at the top of the Money tab.`}</p>` : "";
   return infoStats([["💰 Coins / hour", m.hour == null ? "—" : fmt(m.hour), m.hour == null ? "enter your Mining Speed" : `${fmt(m.perH)} ${m.unit}${m.unit === "boss" ? "es" : "s"} an hour`],
       [`🎁 Per ${m.unit}`, fmt(m.gross), "average value of what you get"], m.cost ? [`💸 Costs per ${m.unit}`, fmt(m.cost), ""] : null, [`✅ Profit per ${m.unit}`, fmt(m.net), ""]])
-    + `${m.ok ? "" : `<div class="msg">🔒 ${esc(m.why)}</div>`}<div class="mspeedrow">⏱ ${speed}</div>${mwTaskBox(m)}
+    + `${m.ok ? "" : `<div class="msg">🔒 ${esc(m.why)}</div>`}<div class="mspeedrow">⏱ ${speed}</div>${LINK.speeds[tIn.key] ? `<p class="small">🔗 Measured in your game: <b>${tIn.key === "scph" ? fmt(LINK.speeds[tIn.key].min) + " per hour" : LINK.speeds[tIn.key].min.toFixed(1) + " minutes"}</b> <span class="muted">(${LINK.speeds[tIn.key].how}${LINK.speeds[tIn.key].n ? `, ${LINK.speeds[tIn.key].n} times` : ""}). ${store.get("linkUseMeasured", true) ? (tIn.global ? (+S[tIn.key] > 0 ? "You've typed your own, so that's used instead." : "Used here.") : (+store.get("money:t:" + tIn.key, 0) > 0 ? "You've typed your own, so that's used instead." : "Used here.")) : "Not used (turned off in the Methods tab)."}</span></p>` : ""}${mwTaskBox(m)}
     <h4>${m.cat === "farm" || m.cat === "mine" ? "What you get" : "Drops"}</h4>${dropT}${chests}${costs}${fort}
     ${m.slow?.length ? `<div class="msg">🐢 <b>Slow to sell:</b> ${m.slow.map(x => `${esc(x.item)}: you'd make ${fmt(x.made)}/hour, the market trades about ${fmt(x.mkt)}/hour`).join("; ")}. Coins/hour only counts what the market can take (half its hourly trading); at full value it would be ${fmt(m.hourRaw)}/hour.</div>` : ""}
     ${m.unknown.length ? `<p class="small muted">No price found for: ${m.unknown.map(d => esc(d.item)).join(", ")} (counted as 0).</p>` : ""}
@@ -3311,7 +3311,7 @@ function chainTreeHTML(S, C, bz, o, id, amount, depth = 0){
 const FARM_LAMBDAS = [1e5, 3e5, 7e5, 1.5e6, 3e6, 5e6, 8e6, 1.2e7, 2e7, 3.5e7, 6e7, 1e8];
 let FARM_CACHE = null;
 function farmPlans(S, bz, o){
-  const ck = [bz.t, o.buy, o.sell, o.minVol, o.tax, o.speed, o.hours, o.minRate, o.depth].join("|");
+  const ck = [bz.t, o.buy, o.sell, o.minVol, o.tax, o.speed, o.hours, o.minRate, o.depth, o.myRates ? "my" + LINK.ver : ""].join("|");
   if (FARM_CACHE?.ck === ck && FARM_CACHE.S === S) return FARM_CACHE.res;   // new shard data (S) needs its own flat copy
   const tax = 1 - (+o.tax || 0) / 100, share = 0.25, hours = Math.max(0.5, +o.hours || 2), speed = (+o.speed || 50) / 100;
   const depth = Math.max(1, Math.min(4, +o.depth || 3));
@@ -3332,7 +3332,7 @@ function farmPlans(S, bz, o){
   S.list.forEach((s, i) => {
     const p = px(s.id), v = p && (o.buy === "instant" ? p.ask : p.bid), vol = p && (o.buy === "instant" ? p.askVol : p.bidVol);
     buy[i] = v > 0 && vol >= o.minVol ? v : Infinity;
-    const r = s.rate * speed; rate[i] = s.rate > 0 && r >= (+o.minRate || 0) ? r : 0;
+    const r = (o.myRates && linkRate(s.id)) || s.rate * speed; rate[i] = r > 0 && r >= (+o.minRate || 0) ? r : 0;   // your measured rate (game link) when asked for
     const sp = p && (o.sell === "instant" ? p.bid : p.ask), sv = p && (o.sell === "instant" ? p.bidVol : p.askVol);
     sell[i] = sp > 0 && sv >= o.minVol ? sp : 0; sellVol[i] = sv || 0;
   });
@@ -3643,11 +3643,238 @@ function budgetHTML(S, bz, p, kind, budget, maxRuns, instantBuy, speed){
         ${(() => { const px = Math.max(0.1, +((r.mine?.cheapest ? r.mine.othersAsk : r.ask) - 0.1).toFixed(1));
           return myOfferHTML({...r, id:p.out}) + `<div style="margin-top:6px"><button class="mini" data-myoffer="${esc(p.out)}|${sold}|${px}">🙋 I listed ${sold.toLocaleString("en-US")} at ${pxTxt(px)}</button> <span class="muted">so the app knows which offer is yours (change it in the shard's popup)</span></div>`; })()}</div>`; })()}</div>`;
 }
+// ---------- Game link: the SkyBlock Helper Link mod ----------
+// The mod (client-only, read-only) appends your own SkyBlock system messages, skill XP gains, area, purse and Bazaar
+// orders to a file; the desktop app lets this page read that file. From it the app measures your real speeds (catch
+// rates, minutes per slayer boss / dungeon / Kuudra run, sea creatures and XP per hour), tracks your Bazaar orders,
+// knows your live purse, and can notify you when an order fills or is undercut.
+const LINK = {events:[], off:{}, last:0, ver:0, rates:{}, open:{}, openBuy:{}, claims:[], drops:[], fuses:0, started:false, boot:Date.now(),
+  speeds:{}, sea:null, xp:{}, purse:null, area:"", loot:{}, refunds:0, ordersAt:0, notified:new Set(), cheap:{}};
+const linkNum = x => { const m = String(x).replace(/,/g, "").match(/^([\d.]+)\s*([kmb]?)/i); return m ? +m[1] * ({"":1, k:1e3, m:1e6, b:1e9})[m[2].toLowerCase()] : 0; };
+const linkMedian = a => { const b = [...a].sort((x, y) => x - y); return b.length ? b[b.length >> 1] : 0; };
+function linkShardId(name){
+  if (!SHARDS) return null;
+  const n = String(name).replace(/\s+Shards?$/i, "").trim().toLowerCase();
+  return SHARDS.list.find(x => String(x.name).toLowerCase() === n)?.id || null;
+}
+function linkOrders(text){
+  if (text === "none") return [];
+  return text.split(" || ").map(o => {
+    const parts = o.split(" ; "), head = parts[0].match(/^(BUY|SELL) (.+)$/); if (!head) return null;
+    const get = re => { for (const p of parts){ const m = p.match(re); if (m) return m; } return null; };
+    const amt = get(/^(?:Order|Offer) amount: ([\d,.]+[kKmM]?)x/), fil = get(/^Filled: ([\d,.]+[kKmM]?)\s*\/\s*([\d,.]+[kKmM]?)/), px = get(/^Price per unit: ([\d,.]+) coins/);
+    const amount = amt ? linkNum(amt[1]) : fil ? linkNum(fil[2]) : 0, filled = fil ? linkNum(fil[1]) : 0;
+    return {side:head[1] === "SELL" ? "sell" : "buy", name:head[2].trim(), amount, filled, left:Math.max(0, amount - filled), price:px ? linkNum(px[1]) : 0};
+  }).filter(Boolean);
+}
+function linkParse(e){
+  const m = String(e.m || "").replace(/\s*\(\d+\)$/, "").replace(/[ \t]+/g, " ").trim(), t = +e.t || 0; let x;
+  if ((x = m.match(/^You caught (a|an|x?[\d,]+x?) (.+?) Shards?!/))) return {t, k:"catch", n:/\d/.test(x[1]) ? linkNum(x[1].replace(/x/g, "")) : 1, name:x[2]};   // "a Solar Shard", "x2 Solar Shards"
+  if ((x = m.match(/^You caught an? (.+?)!$/))) return {t, k:"sea", name:x[1]};
+  if (/^It's a Double Hook!/.test(m)) return {t, k:"dhook"};
+  if ((x = m.match(/^CHARM! You charmed the .+? and received ([\d,]+) (.+?) Shards?!/))) return {t, k:"catch", n:linkNum(x[1]), name:x[2]};
+  if ((x = m.match(/^LOOT SHARE You received an? (.+?) Shards?/))) return {t, k:"loot", n:1, name:x[1]};
+  if ((x = m.match(/^FUSION! You obtained (.+?) Shard x([\d,]+)/))) return {t, k:"fuse", n:linkNum(x[2]), name:x[1]};
+  if ((x = m.match(/^SLAYER QUEST (STARTED|COMPLETE|FAILED)!/))) return {t, k:"sq", ev:{STARTED:"start", COMPLETE:"done", FAILED:"fail"}[x[1]]};
+  if ((x = m.match(/^SLAYER BOSS! The (.+?) (I|II|III|IV|V) spawned!/))) return {t, k:"sq", ev:"spawn", boss:x[1], tier:ROMAN[x[2]]};
+  if (/^NICE! SLAYER BOSS SLAIN!/.test(m)) return {t, k:"sq", ev:"slain"};
+  if ((x = m.match(/^\[Dungeon\] (.*)$/))){
+    const f = x[1].match(/(Master Mode )?(?:The )?Catacombs - (?:Floor )?F?(\w+)/), d = x[1].match(/Defeated .+? in (?:(\d+)h )?(?:(\d+)m )?(\d+)s/), sc = x[1].match(/Score: (\d+)/);
+    const n = f ? (ROMAN[f[2]] || +f[2] || 0) : 0;
+    return {t, k:"run", kind:"dungeon", key:n ? `dungeon:${f[1] ? "M" : "F"}${n}` : "", min:d ? (+d[1] || 0) * 60 + (+d[2] || 0) + (+d[3] || 0) / 60 : 0, score:sc ? +sc[1] : 0};
+  }
+  if ((x = m.match(/^\[Kuudra\] (.*)$/))){
+    const tn = ["Basic", "Hot", "Burning", "Fiery", "Infernal"].findIndex(n => x[1].includes(n)), tt = x[1].match(/Tier (\d)/);
+    const i = tn >= 0 ? tn : tt ? +tt[1] - 1 : -1;
+    return {t, k:"run", kind:"kuudra", key:i >= 0 ? `kuudra:${i}` : "", min:0};
+  }
+  if ((x = m.match(/^\[Skill\] \+([\d,.]+) (\w+) \(/))) return {t, k:"xp", skill:x[2], n:linkNum(x[1])};
+  if ((x = m.match(/^\[Area\] (.+)$/))) return {t, k:"area", name:x[1]};
+  if ((x = m.match(/^\[Purse\] ([\d,.]+)/))) return {t, k:"purse", v:linkNum(x[1])};
+  if ((x = m.match(/^\[Orders\] (.*)$/))) return {t, k:"orders", list:linkOrders(x[1])};
+  if ((x = m.match(/^\[Bazaar\] (Sell Offer|Buy Order) Setup! ([\d,]+)x (.+?) for ([\d,.]+) coins/))) return {t, k:"setup", side:x[1] === "Sell Offer" ? "sell" : "buy", n:linkNum(x[2]), name:x[3].trim(), total:linkNum(x[4])};
+  if ((x = m.match(/^\[Bazaar\] Cancelled! Refunded ([\d,]+)x (.+?) from cancelling Sell Offer/))) return {t, k:"cancel", side:"sell", n:linkNum(x[1]), name:x[2].trim()};
+  if ((x = m.match(/^\[Bazaar\] Cancelled! Refunded ([\d,.]+) coins from cancelling Buy Order/))) return {t, k:"refund", coins:linkNum(x[1])};
+  if ((x = m.match(/^\[Bazaar\] Your (?:co-op )?(Sell Offer|Buy Order) for ([\d,]+)x (.+?) was filled/))) return {t, k:"filled", side:x[1] === "Sell Offer" ? "sell" : "buy", n:linkNum(x[2]), name:x[3].trim()};
+  if ((x = m.match(/^\[Bazaar\] Claimed ([\d,.]+) coins from selling ([\d,]+)x (.+?) at ([\d,.]+) each/))) return {t, k:"claim", side:"sell", coins:linkNum(x[1]), n:linkNum(x[2]), name:x[3].trim(), each:linkNum(x[4])};
+  if ((x = m.match(/^\[Bazaar\] Claimed ([\d,]+)x (.+?) worth ([\d,.]+) coins bought for ([\d,.]+) each/))) return {t, k:"claim", side:"buy", coins:linkNum(x[3]), n:linkNum(x[1]), name:x[2].trim(), each:linkNum(x[4])};
+  if ((x = m.match(/^\[Bazaar\] (Sold|Bought) ([\d,]+)x (.+?) for ([\d,.]+) coins/))) return {t, k:"instant", side:x[1] === "Sold" ? "sell" : "buy", n:linkNum(x[2]), name:x[3].trim(), coins:linkNum(x[4])};
+  if ((x = m.match(/^((?:VERY |CRAZY )?RARE|INSANE|PRAY TO RNGESUS) DROP! (.+?)(?: \(\+[\d,.]+ ?✯? ?Magic Find\))?$/))) return {t, k:"drop", tier:x[1], name:x[2]};
+  return null;
+}
+// sessions: runs of events with under `gap` between them; returns [{t0, t1, items}]
+function linkSessions(list, gap){
+  const out = []; let cur = null;
+  for (const e of list){ if (cur && e.t - cur.t1 <= gap){ cur.t1 = e.t; cur.items.push(e); } else { cur = {t0:e.t, t1:e.t, items:[e]}; out.push(cur); } }
+  return out;
+}
+// what the events add up to
+function linkApply(){
+  const E = LINK.events; let open = {}, openBuy = {}, area = "", areaT = 0, fuses = 0, refunds = 0, purse = null, ordersAt = 0;
+  const claims = [], drops = [], loot = {};
+  for (const e of E){
+    if (e.k === "area"){ area = e.name; areaT = e.t; continue; }
+    if (e.k === "catch" || e.k === "sea" || e.k === "xp") e.area = area && e.t - areaT < 3 * 3600e3 ? area : "";
+    if (e.k === "orders"){   // the orders menu shows everything exactly; chat after it updates it
+      open = {}; openBuy = {}; ordersAt = e.t;
+      for (const o of e.list){ if (!o.left) continue; const into = o.side === "sell" ? open : openBuy; const p = into[o.name] ||= {n:0, price:0, t:e.t}; p.n += o.left; p.price = o.price; }
+    }
+    else if (e.k === "setup"){ const into = e.side === "sell" ? open : openBuy; const o = into[e.name] ||= {n:0, price:0, t:0}; o.n += e.n; o.price = e.total / Math.max(1, e.n); o.t = e.t; }
+    else if (e.k === "cancel" || e.k === "filled") delete (e.side === "sell" ? open : openBuy)[e.name];
+    else if (e.k === "claim" || e.k === "instant") claims.push(e);
+    else if (e.k === "drop") drops.push(e);
+    else if (e.k === "fuse") fuses += e.n;
+    else if (e.k === "loot") loot[e.name] = (loot[e.name] || 0) + e.n;
+    else if (e.k === "refund") refunds += e.coins;
+    else if (e.k === "purse") purse = {v:e.v, t:e.t};
+  }
+  // catch rates: a farming session is a run of catches with under 5 minutes between them; a shard's rate is its catches
+  // over the sessions it was caught in ("per hour farming where it shows up"), overall and per area
+  const rates = {}, addRate = (key, name, n, h, where) => {
+    const r = rates[key] ||= {name, n:0, h:0, sessions:0, byArea:{}}; r.n += n; r.h += h; r.sessions++;
+    if (where){ const a = r.byArea[where] ||= {n:0, h:0}; a.n += n; a.h += h; }
+  };
+  for (const s of linkSessions(E.filter(e => e.k === "catch"), 5 * 60e3)){
+    if (s.items.length < 2) continue;
+    const h = (s.t1 - s.t0) / 3600e3 + 1 / 60, per = {}, cnt = {};
+    for (const e of s.items) if (e.area) cnt[e.area] = (cnt[e.area] || 0) + 1;
+    const where = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]?.[0] || "";   // the area most of the session was in
+    for (const e of s.items) per[e.name] = (per[e.name] || 0) + e.n;
+    for (const [name, n] of Object.entries(per)) addRate(linkShardId(name) || name, name, n, h, where);
+  }
+  for (const r of Object.values(rates)){ r.perHr = r.n / Math.max(1e-6, r.h); for (const a of Object.values(r.byArea)) a.perHr = a.n / Math.max(1e-6, a.h); }
+  // speeds for the Methods tab, in the same units it uses
+  const speeds = {}, put = (key, mins, n, how) => { if (key && mins.length >= 3) speeds[key] = {min:linkMedian(mins), n:mins.length, how}; };
+  // slayer: minutes from one completed quest to the next (so spawning the boss counts), when under 20 minutes apart
+  const cyc = {}; let boss = null, lastDone = 0;
+  for (const e of E.filter(e => e.k === "sq")){
+    if (e.ev === "spawn"){ const sl = MW_SLAYERS.find(s => s[1] === e.boss); boss = sl ? `slayer:${sl[0]}:${e.tier}` : null; }
+    else if (e.ev === "done"){ if (boss && lastDone && e.t - lastDone < 20 * 60e3) (cyc[boss] ||= []).push((e.t - lastDone) / 60e3); lastDone = e.t; boss = null; }
+    else if (e.ev === "fail") lastDone = 0;
+  }
+  for (const [k, v] of Object.entries(cyc)) put(k, v, v.length, "from one finished boss to the next");
+  // dungeons and Kuudra: minutes between finished runs of the same kind (under 30 minutes apart); else the run time + 1.5
+  const runs = {};
+  for (const e of E.filter(e => e.k === "run" && e.key)) (runs[e.key] ||= []).push(e);
+  for (const [k, L] of Object.entries(runs)){
+    const gaps = []; for (let i = 1; i < L.length; i++){ const g = (L[i].t - L[i - 1].t) / 60e3; if (g < 30) gaps.push(g); }
+    if (gaps.length >= 3) put(k, gaps, gaps.length, "between finished runs, queueing included");
+    else if (L.filter(e => e.min).length >= 3) put(k, L.filter(e => e.min).map(e => e.min + 1.5), 0, "run time from the end screen, plus 1.5 minutes between runs");
+  }
+  // sea creatures per hour (only creatures whose catch says "You caught a …"), and XP per hour per skill
+  const seaS = linkSessions(E.filter(e => e.k === "sea"), 5 * 60e3).filter(s => s.items.length >= 2);
+  const seaN = seaS.reduce((a, s) => a + s.items.length, 0), seaH = seaS.reduce((a, s) => a + (s.t1 - s.t0) / 3600e3 + 1 / 60, 0);
+  const sea = seaN ? {n:seaN, h:seaH, perHr:seaN / seaH, dhook:E.filter(e => e.k === "dhook").length} : null;
+  if (sea && sea.n >= 30 && sea.h >= 0.5) speeds.scph = {min:sea.perHr, n:sea.n, how:"sea creatures caught per hour while fishing", rate:true};
+  const xp = {};
+  for (const skill of [...new Set(E.filter(e => e.k === "xp").map(e => e.skill))]){
+    const S2 = linkSessions(E.filter(e => e.k === "xp" && e.skill === skill), 5 * 60e3).filter(s => s.items.length >= 3);
+    const n = S2.reduce((a, s) => a + s.items.reduce((b, e) => b + e.n, 0), 0), h = S2.reduce((a, s) => a + (s.t1 - s.t0) / 3600e3, 0);
+    if (h > 0.05) xp[skill] = {n, h, perHr:n / h};
+  }
+  Object.assign(LINK, {open, openBuy, claims:claims.slice(-30).reverse(), drops:drops.slice(-30).reverse(), fuses, loot, refunds, purse, ordersAt, speeds, sea, xp, area,
+    rates:rates});
+  // keep the app's "your sell offer" in step with what the game said
+  if (SHARDS){
+    const was = store.get("linkOpen", []), now = [];
+    for (const [name, o] of Object.entries(open)){
+      const id = linkShardId(name); if (!id) continue; now.push(id);
+      const cur = myOffers()[id];
+      if (!cur || cur.n !== Math.round(o.n) || Math.abs(cur.price - o.price) > 0.05) setMyOffer(id, o.n, o.price);
+    }
+    for (const id of was) if (!now.includes(id) && myOffers()[id]) setMyOffer(id, 0, 0);
+    store.set("linkOpen", now);
+  }
+  LINK.ver++;
+}
+// measured catches per hour for a shard (only once there's enough to trust)
+const linkRate = id => { const r = LINK.rates[id]; return r && r.n >= 20 && r.h >= 0.25 ? r.perHr : 0; };
+// a measured speed for a Methods-tab key (minutes per boss/run, or a per-hour rate), when the game link has one
+const linkMeasured = key => store.get("linkUseMeasured", true) && LINK.speeds[key] ? LINK.speeds[key].min : 0;
+// your purse right now: from the game's sidebar when it's recent, else from the API
+const livePurse = st => LINK.purse && Date.now() - LINK.purse.t < 15 * 60e3 ? LINK.purse.v : (st?.purse || 0);
+// desktop notifications (from the app, never in game): orders filled, sell offers undercut
+function linkNotify(title, body, key){
+  if (!store.get("linkNotify", true) || LINK.notified.has(key) || typeof Notification === "undefined") return;
+  LINK.notified.add(key);
+  try { new Notification(title, {body, silent:false}); } catch {}
+}
+function linkCheckAlerts(fresh){
+  for (const e of fresh) if (e.k === "filled" && e.t > LINK.boot) linkNotify(`${e.side === "sell" ? "Sell offer" : "Buy order"} filled`, `${e.n.toLocaleString("en-US")}× ${e.name}`, "f" + e.t + e.name);
+  if (!SHARDS || !BZFULL || Date.now() - BZFULL.t > 5 * 60e3) return;
+  for (const name of Object.keys(LINK.open)){
+    const id = linkShardId(name); if (!id) continue;
+    const o = myOffer(BZFULL.m[SHARDS.by[id]?.bz], id); if (!o || o.pending || o.gone) continue;
+    if (LINK.cheap[id] && !o.cheapest) linkNotify("Sell offer undercut", `${name}: ${o.ahead.toLocaleString("en-US")} listed below you, cheapest now ${pxTxt(o.othersAsk)}`, "u" + id + BZFULL.t);
+    LINK.cheap[id] = o.cheapest;
+  }
+}
+async function linkPoll(){
+  if (!window.sbLink) return;
+  const fresh = [];
+  for (const which of LINK.started ? ["events.jsonl"] : ["events.1.jsonl", "events.jsonl"]){
+    try {
+      const r = await window.sbLink.read(which, LINK.off[which] || 0);
+      if (r.missing){ LINK.off[which] = 0; continue; }
+      if (r.start === 0 && (LINK.off[which] || 0) > 0 && which === "events.jsonl"){ LINK.events = LINK.events.filter(e => e.src !== which); }   // rotated
+      // only whole lines: the mod may be halfway through writing the last one
+      const done = r.text.slice(0, r.text.lastIndexOf("\n") + 1);
+      LINK.off[which] = (r.start || 0) + new TextEncoder().encode(done).length;
+      for (const line of done.split("\n")){
+        if (!line.trim()) continue;
+        try { const e = linkParse(JSON.parse(line)); if (e){ e.src = which; LINK.events.push(e); fresh.push(e); LINK.last = Math.max(LINK.last, e.t); } } catch {}
+      }
+    } catch {}
+  }
+  LINK.started = true;
+  if (fresh.length){ LINK.events.sort((a, b) => a.t - b.t); linkApply(); MONEY_REDRAW?.(); if (tab === "money" && !document.querySelector("#modal.on")) render(); }
+  // keep Bazaar prices fresh while you have sell offers out, so an undercut can be noticed
+  if (Object.keys(LINK.open).length && SHARDS && (!BZFULL || Date.now() - BZFULL.t > 110e3)) { try { await loadBazaarFull(false); } catch {} }
+  linkCheckAlerts(fresh);
+}
+if (window.sbLink){ setTimeout(linkPoll, 1500); setInterval(linkPoll, 5000); }
+// a readable name for a measured-speed key
+const linkKeyName = k => k === "scph" ? "fishing" : k.replace(/^slayer:(\w+):(\d)/, (m, a, b) => (MW_SLAYERS.find(x => x[0] === a)?.[1] || a) + " T" + b).replace(/^dungeon:F(\d)/, "Floor $1").replace(/^dungeon:M(\d)/, "Master Mode $1").replace(/^kuudra:(\d)/, (m, i) => "Kuudra " + ["Basic", "Hot", "Burning", "Fiery", "Infernal"][+i]);
+// a line for the Methods tab: which speeds come from your game
+function linkMethodsNote(){
+  const n = Object.keys(LINK.speeds).length; if (!window.sbLink) return "";
+  if (!LINK.events.length) return `<p class="small muted">🔗 With the SkyBlock Helper Link mod installed, your real minutes per slayer boss, dungeon and Kuudra run, and sea creatures per hour replace these defaults.</p>`;
+  return `<p class="small">🔗 ${n ? `<b>${n}</b> speed${n === 1 ? " is" : "s are"} measured from your game (${Object.keys(LINK.speeds).map(k => esc(linkKeyName(k))).join(", ")}) and used instead of the defaults, unless you've typed your own.` : "No speeds measured yet: they appear after 3 finished slayer bosses, runs or 30 sea creatures."} <label class="chk"><input type="checkbox" data-linkuse ${store.get("linkUseMeasured", true) ? "checked" : ""}> use them</label></p>`;
+}
+document.addEventListener("change", e => {
+  if (e.target.matches?.("[data-linkuse]")){ store.set("linkUseMeasured", e.target.checked); render(); }
+  if (e.target.matches?.("[data-linknotify]")) store.set("linkNotify", e.target.checked);
+});
+function linkHTML(S, u){
+  const has = LINK.events.length, ago = LINK.last ? Math.round((Date.now() - LINK.last) / 60e3) : null;
+  const status = !window.sbLink ? "only in the desktop app" : has ? `connected · ${has.toLocaleString("en-US")} messages, last ${ago < 1 ? "just now" : ago < 120 ? ago + " min ago" : Math.round(ago / 60) + " h ago"}` : "waiting for the mod";
+  const N = id => S.by[id] ? shardName(S.by[id]) : esc(id);
+  const rates = Object.entries(LINK.rates).sort((a, b) => b[1].n - a[1].n).slice(0, 25);
+  const bestArea = r => Object.entries(r.byArea).filter(([, a]) => a.n >= 10).sort((a, b) => b[1].perHr - a[1].perHr)[0];
+  const tbl = rates.length ? `<table class="small"><thead><tr><th>Shard</th><th class="mnum">Caught</th><th class="mnum">Hours farming</th><th class="mnum">Your rate</th><th>Best spot</th><th class="mnum">SkyShards (top gear)</th></tr></thead><tbody>
+    ${rates.map(([id, r]) => { const top = S.by[id]?.rate || 0, b = bestArea(r); return `<tr><td>${N(id)}</td><td class="mnum">${fmt(r.n)}</td><td class="mnum">${r.h.toFixed(1)}</td><td class="mnum"><b>${fmt(r.perHr)}/h</b>${linkRate(id) ? "" : ' <span class="muted" title="Under 20 catches or 15 minutes: not used yet">(few)</span>'}</td><td>${b ? `${esc(b[0])} <span class="muted">${fmt(b[1].perHr)}/h</span>` : '<span class="muted">—</span>'}</td><td class="mnum">${top ? `${fmt(top)}/h <span class="muted">(you: ${Math.round(r.perHr / top * 100)}%)</span>` : "—"}</td></tr>`; }).join("")}</tbody></table>` : '<p class="muted small">No shard catches recorded yet.</p>';
+  const list = o => Object.entries(o).map(([name, x]) => `${Math.round(x.n).toLocaleString("en-US")}× ${esc(name)} @ ${pxTxt(x.price)}`).join(", ");
+  const sold = LINK.claims.filter(c => c.side === "sell"), soldSum = sold.reduce((a, c) => a + (c.coins || 0), 0);
+  const sp = Object.entries(LINK.speeds).filter(([k]) => k !== "scph");
+  const lootN = Object.values(LINK.loot).reduce((a, b) => a + b, 0);
+  return `<details class="card small" data-k="link" style="margin-bottom:12px"${has ? "" : " open"}><summary><b>🔗 Game link</b> <span class="muted">· ${status}${LINK.area ? ` · 📍 ${esc(LINK.area)}` : ""}${LINK.purse && Date.now() - LINK.purse.t < 15 * 60e3 ? ` · 💰 purse ${fmt(LINK.purse.v)}` : ""}</span></summary>
+    ${has ? "" : `<p>Install the <b>SkyBlock Helper Link</b> mod in your Fabric 26.2 profile and the app tracks your Bazaar orders and measures your real speeds while you play. It's read-only: it writes down what your game already shows you (your SkyBlock messages, skill XP, area, purse, and your Bazaar orders when you open that menu) to a file on your PC, and never sends, types, clicks or shows anything in game.</p>`}
+    ${list(LINK.open) ? `<p>🏷 <b>Open sell offers:</b> ${list(LINK.open)}. Filled in as "your offer" automatically.</p>` : ""}
+    ${list(LINK.openBuy) ? `<p>🛒 <b>Open buy orders:</b> ${list(LINK.openBuy)}.</p>` : ""}
+    ${LINK.ordersAt ? `<p class="muted">Exact amounts last read from your Bazaar Orders menu ${hrsTxt((Date.now() - LINK.ordersAt) / 3600e3)} ago; chat since then is added on top.</p>` : has ? `<p class="muted">Open your Bazaar Orders menu once in game to load exact amounts, including buy orders.</p>` : ""}
+    <label class="chk"><input type="checkbox" id="muMyRates" ${u.myRates ? "checked" : ""}> Use my measured catch rates in the plans</label> <span class="muted">(for shards with 20+ catches; others keep SkyShards × your speed)</span>
+    <label class="chk" style="margin-left:12px"><input type="checkbox" data-linknotify ${store.get("linkNotify", true) ? "checked" : ""}> Desktop notifications when an order fills or a sell offer is undercut</label>
+    ${tbl}
+    ${sp.length || LINK.sea ? `<p><b>⏱ Your measured speeds</b> <span class="muted">(used in the Money tab's Methods instead of the defaults, unless you typed your own)</span>: ${[...sp.map(([k, s]) => `${esc(linkKeyName(k))} <b>${s.min.toFixed(1)} min</b> <span class="muted">(${s.n || "3+"} runs)</span>`), ...(LINK.sea ? [`fishing <b>${fmt(LINK.sea.perHr)} sea creatures/h</b> <span class="muted">(${fmt(LINK.sea.n)} caught, ${LINK.sea.dhook} Double Hooks)</span>`] : [])].join(" · ")}</p>` : ""}
+    ${Object.keys(LINK.xp).length ? `<p><b>📈 Skill XP per hour while active:</b> ${Object.entries(LINK.xp).sort((a, b) => b[1].perHr - a[1].perHr).map(([k, x]) => `${esc(k)} <b>${fmt(x.perHr)}</b>`).join(" · ")}</p>` : ""}
+    ${sold.length ? `<p>💰 Last ${sold.length} Bazaar sales: <b>${fmt(soldSum)}</b> coins${LINK.refunds ? ` · ${fmt(LINK.refunds)} refunded from cancelled buy orders` : ""}.</p>` : ""}
+    ${LINK.fuses || lootN ? `<p class="muted">${LINK.fuses ? `⚗ ${LINK.fuses.toLocaleString("en-US")} shards made by fusion` : ""}${LINK.fuses && lootN ? " · " : ""}${lootN ? `🤝 ${lootN} shards from Loot Share (not counted in your catch rates)` : ""}.</p>` : ""}</details>`;
+}
 // ---------- Money making sub-tab ----------
 // What testing showed: buying everything and flipping instantly barely makes anything, and farming then
 // selling instantly loses to just selling rare drops. What works is farming a fast, cheap shard, fusing it with
 // cheap bought partners, and selling the result with a sell offer. So that's what this tab shows.
-const MONEY_UI_DEF = {speed:50, hours:2, depth:3, multi:false, borderline:false, live:true, q:"", budget:"", sort:"mix"};
+const MONEY_UI_DEF = {speed:50, hours:2, depth:3, multi:false, borderline:false, live:true, q:"", budget:"", sort:"mix", myRates:true};
 // Ways to sort plans. "mix" averages where a plan ranks on coins per hour, profit per fusion and selling speed.
 const MONEY_SORTS = [["mix", "Best mix"], ["hour", "Coins per hour"], ["fusion", "Profit per fusion"], ["speed", "Sells fastest"]];
 const planPerFusion = p => p.route ? (p.route === "buy" ? p.buyProfit : p.gain) : p.p;
@@ -3669,7 +3896,7 @@ function sortPlans(list, bz, S, how){
 const REALISTIC = 0.5;                // the model is optimistic (catch rates, order fills, competition): plan on half
 const WORTH = 6e6, BORDER = 3e6;      // realistic coins/hour to count as worth doing / borderline
 function moneyFindings(S, bz, u){
-  const base = {buy:"instant", sell:"offer", minVol:10000, tax:1.25, speed:u.speed, hours:u.hours, minRate:0, depth:Math.min(4, u.depth), cap:50, sort:"daily"};
+  const base = {buy:"instant", sell:"offer", minVol:10000, tax:1.25, speed:u.speed, hours:u.hours, minRate:0, depth:Math.min(4, u.depth), cap:50, sort:"daily", myRates:!!u.myRates};
   const all = farmPlans(S, bz, base);
   const kinds = p => Object.keys(p.need.farm).length;
   const fusion = all.filter(p => !p.sellRaw && !(p.spread > 3) && (u.multi || kinds(p) === 1));
@@ -3798,7 +4025,7 @@ function moneyHTML2(S, bz, u){
   const f = {...f0, worth:ranked.filter(p => inWorth.has(p)), border:ranked.filter(p => !inWorth.has(p)), passive:sortPlans(f0.passive, bz, S, sortBy)};
   const sellTime = p => { const h = planSellH(bz, S, p); return isFinite(h) ? `<div class="muted small">⏳ one fusion's output sells in ~${hrsTxt(h)} in line behind what's listed</div>` : ""; };
   const N = id => shardName(S.by[id]);
-  const budget = parseCoins(u.budget) || (CUR ? (CUR.st.purse || 0) + (CUR.st.bank || 0) : 0);
+  const budget = parseCoins(u.budget) || (CUR ? livePurse(CUR.st) + (CUR.st.bank || 0) : 0);
   const areaOf = p => p.areas.map(esc).join(", ");
   const steps = p => `<ul class="chain small"><li>⚗ Final fusion: ${p.fa}× ${N(p.a)} + ${p.fb}× ${N(p.b)} → <b>${p.q}×</b> ${N(p.out)} <span class="muted">sell offer @ ${fmt(p.sell)}</span>
     <ul>${p.a === p.b ? farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.a, p.fa + p.fb) : farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.a, p.fa) + farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.b, p.fb)}</ul></li></ul>
@@ -3822,7 +4049,7 @@ function moneyHTML2(S, bz, u){
   const head = `<thead><tr><th>Farm or buy</th><th>Also buy (per run)</th><th>Make → sell offer</th><th>Realistic /hr</th><th>Profit per fusion</th><th></th></tr></thead>`;
   const top = f.worth[0] || f.border[0];
   const histNote = f.histLoading ? `<div class="muted small" style="margin-bottom:8px">⏳ Checking the past week's prices, so the ranking may still change…</div>` : "";
-  return `${histNote}${spreadHTML(S, bz, spreadBudget(S, bz, [...f0.worth, ...f0.border], budget, Math.max(0.5, +u.hours || 2)), budget, u)}${top ? `<div class="card best" style="margin-top:12px"><div class="muted small">${sortBy === "hour" ? "BEST PLAN RIGHT NOW" : `TOP PLAN · sorted by ${esc((MONEY_SORTS.find(x => x[0] === sortBy) || [, ""])[1]).toLowerCase()}`}</div>
+  return `${linkHTML(S, u)}${histNote}${spreadHTML(S, bz, spreadBudget(S, bz, [...f0.worth, ...f0.border], budget, Math.max(0.5, +u.hours || 2)), budget, u)}${top ? `<div class="card best" style="margin-top:12px"><div class="muted small">${sortBy === "hour" ? "BEST PLAN RIGHT NOW" : `TOP PLAN · sorted by ${esc((MONEY_SORTS.find(x => x[0] === sortBy) || [, ""])[1]).toLowerCase()}`}</div>
       <div style="font-size:16px;margin:4px 0">${top.route === "buy" ? "Buy" : "Farm"} <b>${Object.keys(top.need.farm).map(N).join(" + ")}</b>${top.route === "buy" ? "" : ` <span class="muted small">📍 ${areaOf(top)}</span>`} → fuse into <b>${N(top.out)}</b> → sell offer</div>
       <div><span class="good" style="font-size:22px;font-weight:700">~${fmt(top.real)}/hour</span> <span class="muted">realistic · +${fmt(top.route === "buy" ? top.buyProfit : top.gain)} per fusion${top.route === "buy" ? ", no farming needed" : " over selling what you farm"}</span></div>
       ${steps(top)}</div>` : `<div class="msg">Nothing clears the bar right now with these settings. Try a higher speed or more chain steps, or check back after prices move.</div>`}
@@ -3858,7 +4085,7 @@ function moneyPane(){
       <label class="chk">Chains ${opt("muDepth", u.depth, [[1,"Single fusion"],[2,"Up to 2 steps"],[3,"Up to 3 steps"],[4,"Up to 4 steps"]])}</label>
       <label class="chk" title="Best mix averages where each plan ranks on coins per hour, profit per fusion and how fast it sells">Sort ${opt("muSort", u.sort, MONEY_SORTS)}</label>
       <label class="chk"><input type="checkbox" id="muMulti" ${u.multi ? "checked" : ""}> Allow farming 2+ kinds</label>
-      <label class="chk" title="Coins you want to spend. Every plan's steps then say exactly what to buy and how many. Write 50m, 1.5b or a plain number; empty uses your purse + bank.">💰 Budget <input id="muBudget" size="9" placeholder="${CUR ? fmt((CUR.st.purse || 0) + (CUR.st.bank || 0)) : "e.g. 50m"}" value="${esc(u.budget)}"></label>
+      <label class="chk" title="Coins you want to spend. Every plan's steps then say exactly what to buy and how many. Write 50m, 1.5b or a plain number; empty uses your purse + bank.">💰 Budget <input id="muBudget" size="9" placeholder="${CUR ? fmt(livePurse(CUR.st) + (CUR.st.bank || 0)) : "e.g. 50m"}" value="${esc(u.budget)}"></label>
       <input id="muQ" placeholder="Filter shard…" size="14" value="${esc(u.q)}">
       <span class="sp" style="flex:1"></span>
       <label class="chk"><input type="checkbox" id="muLive" ${u.live ? "checked" : ""}> Live</label>
@@ -3869,7 +4096,7 @@ function moneyPane(){
 let MONEY_TIMER = null, MONEY_REDRAW = null;
 function initMoney(S, an){
   const read = () => ({speed:+$("#muSpeed").value, hours:+$("#muHours").value, depth:+$("#muDepth").value, multi:$("#muMulti").checked, live:$("#muLive").checked, q:$("#muQ").value, budget:$("#muBudget").value, sort:$("#muSort").value,
-    borderline:!!$("#borderBox")?.open});
+    borderline:!!$("#borderBox")?.open, myRates:$("#muMyRates") ? $("#muMyRates").checked : (store.get("moneyUI", {}).myRates ?? true)});
   const draw = async force => {
     const outEl = $("#moneyOut"); if (!outEl) return;
     try {
@@ -3891,6 +4118,7 @@ function initMoney(S, an){
   $("#muQ").addEventListener("input", () => draw(false));
   $("#muBudget").addEventListener("change", () => draw(false));
   $("#muRefresh").addEventListener("click", () => draw(true));
+  $("#moneyOut").addEventListener("change", e => { if (e.target.id === "muMyRates") draw(false); });
   clearInterval(MONEY_TIMER);
   MONEY_TIMER = setInterval(() => {
     const pane = document.querySelector('.pane[data-pane="money"]');
@@ -3960,7 +4188,7 @@ function openShard(id){
       <tr><td class="muted">Shards</td>${(SHARD_LVL[s.rarity] || []).map((n, i) => `<td class="${i < r.level ? "good" : ""}">${n}</td>`).join("")}</tr>
       <tr><td class="muted">Total</td>${s.cum.map((n, i) => `<td class="${i < r.level ? "good" : ""}">${n}</td>`).join("")}</tr></tbody></table>
     <h4>Where to get it</h4>${huntHTML(s)}${(s.where || []).some(w => !w.place && w.method !== "Fusion") ? `<p class="muted small">Location not listed? <a href="https://hypixelskyblock.minecraft.wiki/w/${encodeURIComponent(s.name.replace(/ /g, "_"))}_Shard" target="_blank" rel="noopener">Check the wiki ↗</a></p>` : ""}
-    ${s.rate ? `<p class="muted small">Typical rate: about ${fmt(s.rate)} per hour (SkyShards' estimate, before Hunter Fortune).</p>` : ""}
+    ${s.rate ? `<p class="muted small">Typical rate: about ${fmt(s.rate)} per hour (SkyShards' estimate, before Hunter Fortune).</p>` : ""}${LINK.rates[s.id] ? `<p class="small">🔗 Your measured rate: <b>${fmt(LINK.rates[s.id].perHr)}/hour</b> <span class="muted">(${fmt(LINK.rates[s.id].n)} caught over ${LINK.rates[s.id].h.toFixed(1)} h of farming, from the game link)</span></p>` : ""}
     <h4>Fusion recipes (${recs.length})</h4>
     ${recs.length ? `<table><thead><tr><th>Input 1</th><th>Input 2</th><th>Makes</th><th>Cost</th><th></th></tr></thead><tbody>${recs.slice(0, 12).map(recRow).join("")}</tbody></table>${recs.length > 12 ? `<p class="muted small">Showing the ${recs.some(x => x.haveAll) ? "ones you can fuse, then the " : ""}cheapest 12 of ${recs.length}.</p>` : ""}` : `<p class="muted">This shard can't be made by fusion.</p>`}
     <h4>Can be fused into (${uses.size})</h4>

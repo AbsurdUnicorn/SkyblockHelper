@@ -1,0 +1,20 @@
+{
+	"schemaVersion": 1,
+	"id": "skyblock_helper_link",
+	"version": "${version}",
+	"name": "SkyBlock Helper Link",
+	"description": "Read-only: copies your own SkyBlock chat messages about Bazaar orders, shard catches, fusions and rare drops to a file on your PC so the SkyBlock Helper app can use them. It never sends anything to the server, never types, clicks or automates anything, and shows nothing in game.",
+	"authors": ["AbsurdUnicorn"],
+	"contact": { "sources": "https://github.com/AbsurdUnicorn/SkyblockHelper" },
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["io.github.absurdunicorn.sbhlink.SbhLinkClient"]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

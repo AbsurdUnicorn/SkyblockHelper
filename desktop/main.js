@@ -1,7 +1,26 @@
 // SkyBlock Helper desktop app: one window showing index.html, with automatic updates from GitHub Releases.
-const { app, BrowserWindow, shell, dialog, Menu } = require("electron");
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
+const fs = require("fs");
+
+// ---------- SkyBlock Helper Link (the game mod) ----------
+// The mod appends one JSON line per SkyBlock system message to this folder. The page may read these two files and
+// nothing else, from a byte offset, so it only gets new lines.
+const LINK_DIR = path.join(app.getPath("appData"), "SkyBlock Helper Link");
+ipcMain.handle("link:read", (e, which, from) => {
+  if (which !== "events.jsonl" && which !== "events.1.jsonl") return { size:0, text:"", missing:true };
+  const file = path.join(LINK_DIR, which);
+  try {
+    const size = fs.statSync(file).size;
+    let start = Math.max(0, +from || 0); if (start > size) start = 0;   // the file was rotated: start over
+    start = Math.max(start, size - 8 * 1024 * 1024);                     // never more than 8 MB at once
+    if (start >= size) return { size, text:"" };
+    const fd = fs.openSync(file, "r"), buf = Buffer.alloc(size - start);
+    try { fs.readSync(fd, buf, 0, buf.length, start); } finally { fs.closeSync(fd); }
+    return { size, start, text:buf.toString("utf8") };
+  } catch { return { size:0, text:"", missing:true }; }
+});
 
 if (!app.requestSingleInstanceLock()) app.quit();
 
@@ -13,7 +32,7 @@ function createWindow() {
     title: "SkyBlock Helper",
     icon: path.join(__dirname, "..", "build", "icon.png"),
     autoHideMenuBar: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, "preload.js") },
   });
   win.loadFile(path.join(__dirname, "..", "index.html"));
   // links like the wiki or developer.hypixel.net open in the normal browser
