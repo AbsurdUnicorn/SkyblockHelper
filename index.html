@@ -3204,7 +3204,7 @@ const FARM_LAMBDAS = [1e5, 3e5, 7e5, 1.5e6, 3e6, 5e6, 8e6, 1.2e7, 2e7, 3.5e7, 6e
 let FARM_CACHE = null;
 function farmPlans(S, bz, o){
   const ck = [bz.t, o.buy, o.sell, o.minVol, o.tax, o.speed, o.hours, o.minRate, o.depth].join("|");
-  if (FARM_CACHE?.ck === ck) return FARM_CACHE.res;
+  if (FARM_CACHE?.ck === ck && FARM_CACHE.S === S) return FARM_CACHE.res;   // new shard data (S) needs its own flat copy
   const tax = 1 - (+o.tax || 0) / 100, share = 0.25, hours = Math.max(0.5, +o.hours || 2), speed = (+o.speed || 50) / 100;
   const depth = Math.max(1, Math.min(4, +o.depth || 3));
   const px = id => bz.m[S.by[id]?.bz];
@@ -3294,7 +3294,7 @@ function farmPlans(S, bz, o){
     if (cph > 0) res.push({raw:cph, cph, sellRaw:id, need:{farm:{[id]:1}, buy:{}, fusions:0}, areas:[(S.by[id].where.find(w => w.place && !/Fusion|Shop/.test(w.method)) || {}).place || "?"]});
   }
   res.sort((x, y) => y.cph - x.cph);
-  FARM_CACHE = {ck, res};
+  FARM_CACHE = {ck, S, res};
   return res;
 }
 
@@ -3353,6 +3353,91 @@ function budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy){
   }
   const sellTotal = best.runs * q * p.sell * (1 - 0.0125);
   return {...best, q, why, revenue:sellTotal, profit:sellTotal - (best.runs ? best.cost : 0), first:counts(1).cost};
+}
+// Splitting the buying. One recipe means buying every input from one or two shards, which walks up those order books.
+// So the order is filled in small chunks, each from the cheapest source right now: the result can be fused from
+// several pairs, and each input can be bought or itself fused from cheaper shards (one level down). What's already
+// been bought counts, so sources take turns as their books get pricier. Each bought shard is capped at a quarter of a
+// day's sellers, the result at your share of a day's buyers.
+function bookCostFrom(m, from, n){
+  const book = m?.askBook || []; let skip = from, left = n, cost = 0;
+  for (const [p, k] of book){ const avail = Math.max(0, k - skip); skip = Math.max(0, skip - k); const t = Math.min(left, avail); cost += t * p; left -= t; if (left <= 0) break; }
+  const thin = left > 0; if (thin) cost += left * (book[book.length - 1]?.[0] || m?.ask || Infinity);
+  return {cost, thin};
+}
+// the cheapest k recipes for a shard at today's lowest listings
+function shardRecipes(S, bz, id, k){
+  const out = [];
+  for (const [qty, pairs] of Object.entries(S.rec[id] || {})) for (const [a, b] of pairs){
+    if (a === id || b === id) continue;
+    const A = S.by[a], B = S.by[b]; if (!bz.m[A?.bz]?.askBook?.length || !bz.m[B?.bz]?.askBook?.length) continue;
+    const need = {}; need[a] = (need[a] || 0) + (A.fuse || 5); need[b] = (need[b] || 0) + (B.fuse || 5);
+    const unit = Object.entries(need).reduce((t, [x, n]) => t + n * bz.m[S.by[x].bz].ask, 0) / +qty;
+    out.push({id, a, b, fa:A.fuse || 5, fb:B.fuse || 5, q:+qty, need, unit, runs:0});
+  }
+  return out.sort((x, y) => x.unit - y.unit).slice(0, k);
+}
+function splitBuy(S, bz, p, maxOut, budget){
+  const tax = 1 - 0.0125, top = shardRecipes(S, bz, p.out, 10);
+  if (!top.length || !(maxOut >= 1)) return null;
+  const used = {}, spare = {}, subs = {}, cap = id => (bz.m[S.by[id].bz].askVol || 0) / 7 * 0.25;
+  const subOf = id => subs[id] ||= shardRecipes(S, bz, id, 4).filter(r => !(p.out in r.need));
+  // cheapest way to get n of a shard right now: buy from its book, or fuse it (depth levels down)
+  const src = (id, n, depth) => {
+    const need = Math.max(0, n - (spare[id] || 0)); if (!need) return {cost:0, thin:false, how:"spare"};
+    let best = null; const m = bz.m[S.by[id]?.bz];
+    if (m?.askBook?.length && (used[id] || 0) + need <= cap(id)){ const x = bookCostFrom(m, used[id] || 0, need); best = {cost:x.cost, thin:x.thin, how:"buy"}; }
+    if (depth > 0) for (const r of subOf(id)){
+      const runs = Math.ceil(need / r.q); let c = 0, th = false, ok = true;
+      for (const [x, k] of Object.entries(r.need)){ const y = src(x, k * runs, depth - 1); if (!y){ ok = false; break; } c += y.cost; th ||= y.thin; }
+      if (ok && (!best || c < best.cost)) best = {cost:c, thin:th, how:r, runs};
+    }
+    return best;
+  };
+  const commit = (id, n, depth) => {
+    const sp = Math.min(spare[id] || 0, n); spare[id] = (spare[id] || 0) - sp; n -= sp; if (!n) return;
+    const b = src(id, n, depth);
+    // (an input shared with the other half of the pair can run past its cap: then it is bought anyway)
+    if (!b || b.how === "buy"){ used[id] = (used[id] || 0) + n; return; }
+    b.how.runs += b.runs; spare[id] = (spare[id] || 0) + b.runs * b.how.q - n;
+    for (const [x, k] of Object.entries(b.how.need)) commit(x, k * b.runs, depth - 1);
+  };
+  const chunk = Math.max(1, Math.ceil(maxOut / 60));   // result shards per step
+  let out = 0, cost = 0, thin = false;
+  while (out < maxOut){
+    let best = null;
+    for (const r of top){
+      const runs = Math.max(1, Math.round(chunk / r.q)); let c = 0, th = false, ok = true;
+      for (const [x, k] of Object.entries(r.need)){ const y = src(x, k * runs, 1); if (!y){ ok = false; break; } c += y.cost; th ||= y.thin; }
+      if (!ok) continue;
+      const per = (runs * r.q * p.sell * tax - c) / (runs * r.q);
+      if (per > 0 && (!best || per > best.per)) best = {r, runs, c, th, per};
+    }
+    if (!best || (budget > 0 && cost + best.c > budget)) break;
+    best.r.runs += best.runs; out += best.runs * best.r.q; cost += best.c; thin ||= best.th;
+    for (const [x, k] of Object.entries(best.r.need)) commit(x, k * best.runs, 1);
+  }
+  const each = {}; for (const [id, n] of Object.entries(used)) each[id] = bookCostFrom(bz.m[S.by[id].bz], 0, n).cost / n;
+  const made = Object.values(subs).flat().filter(r => r.runs);
+  const revenue = out * p.sell * tax;
+  return {recs:top.filter(r => r.runs).sort((a, b) => b.runs - a.runs), made, buy:used, each, out, cost, thin, revenue, profit:revenue - cost};
+}
+function splitHTML(S, bz, p, budget, hours){
+  if (p.route !== "buy" || p.steps > 1) return "";
+  const one = budgetPlan(S, bz, {...p, buyAll:true}, "farm", budget, p.buyRuns * hours, true);
+  const sp = splitBuy(S, bz, p, (p.sellVol || 0) / 7 * (p.sellShare || 0.25), budget);
+  if (!sp || (sp.recs.length < 2 && !sp.made.length) || sp.profit < Math.max(1e5, (one.runs ? one.profit : 0) * 1.05)) return "";
+  const N = id => shardName(S.by[id]), nf = n => n.toLocaleString("en-US");
+  const what = [sp.recs.length > 1 ? `${sp.recs.length} recipes` : "", sp.made.length ? `fusing ${[...new Set(sp.made.map(r => r.id))].map(N).join(", ")} instead of buying it all` : ""].filter(Boolean).join(" and ");
+  return `<div class="mbudget"><b>🔀 Split the buying (${what}):</b> <b class="good">+${fmt(sp.profit)}</b> instead of +${fmt(one.runs ? one.profit : 0)} from one source
+    <div class="muted small">Buying a lot of one shard walks up its order book (and there are only so many sellers). So each part of the order comes from whatever is cheapest at that point: another pair that makes ${N(p.out)}, or an input fused from cheaper shards instead of bought.</div>
+    <ol class="small">
+      ${Object.entries(sp.buy).sort((a, b) => b[1] - a[1]).map(([id, n]) => `<li>🛒 Buy <b>${nf(n)}×</b> ${N(id)} <span class="muted">avg ${fmt(sp.each[id])} each = ${fmt(sp.each[id] * n)}</span></li>`).join("")}
+      ${sp.made.map(r => `<li>⚗ Fuse <b>${nf(r.runs)}×</b> ${r.fa}× ${N(r.a)} + ${r.fb}× ${N(r.b)} → ${nf(r.runs * r.q)}× ${N(r.id)} <span class="muted">(cheaper than buying more of it)</span></li>`).join("")}
+      ${sp.recs.map(r => `<li>⚗ Fuse <b>${nf(r.runs)}×</b> ${r.fa}× ${N(r.a)} + ${r.fb}× ${N(r.b)} → ${nf(r.runs * r.q)}× ${N(p.out)}</li>`).join("")}
+      <li>🏷 Sell offer <b>${nf(sp.out)}×</b> ${N(p.out)} @ ${fmt(p.sell)}</li>
+    </ol>
+    <div class="small">Spend <b>${fmt(sp.cost)}</b> → get back <b>${fmt(sp.revenue)}</b> after tax = <b class="good">+${fmt(sp.profit)}</b>${sp.thin ? ' <span style="color:var(--warn)">⚠ more than the order book shows, so the price may climb</span>' : ""}</div></div>`;
 }
 // How fast a shard sells with a sell offer: sell offers are filled by people instant-buying, so it's the weekly instant-buy volume.
 // Whether today's lowest listing is real: compared with the median instant-buy price over the past week (Bazaar history from SkyCofl).
@@ -3523,6 +3608,81 @@ function moneyFindings(S, bz, u){
   const histIds = [...cands, ...passCands].map(p => p.out);
   return {worth, border, rawBest, passive, instFlip, total:fusion.length, histIds, histLoading:histIds.some(id => !(id in SHARD_HIST))};
 }
+// Your budget as one plan: which shards to make and sell, and how many of each. Coins are handed out a little at a
+// time, each time to the plan whose next few fusions return the most per coin, divided by how many days until they'd
+// sell. So a plan gets less once buying more walks up its order book or once its own shards would queue too long, and
+// the money spreads over several shards. Your farming hours go to one farm plan at most; everything else is bought.
+// Each result shard is made by one plan only; plans buying the same shard share its market (a quarter of a day's
+// sellers), and each result is capped at your share of a day's buyers.
+function spreadBudget(S, bz, plans, budget, hrs){
+  if (!(budget > 0) || !plans.length) return null;
+  const farm = plans.filter(p => p.route === "farm" && p.farmCph > 0).sort((a, b) => b.farmCph - a.farmCph)[0];
+  const seen = new Set(), opts = [];
+  for (const [p, mode] of [...(farm ? [[farm, "farm"]] : []), ...plans.filter(p => p.buyProfit > 0 && p.buyRuns > 0).map(p => [p, "buy"])]){
+    if (seen.has(p.out)) continue; seen.add(p.out);
+    const q = mode === "buy" ? {...p, buyAll:true} : p;
+    const at = runs => budgetPlan(S, bz, q, "farm", 0, runs, true);   // cost and returns of exactly this many fusions
+    const one = at(1); if (!(one.cost > 0)) continue;
+    const per = {...p.need.buy}; if (mode === "buy") for (const [id, n] of Object.entries(p.need.farm)) per[id] = (per[id] || 0) + n;
+    opts.push({p, mode, q, at, unit:one.cost, per, max:Math.floor((mode === "buy" ? p.buyRuns : p.runsHr) * hrs), rate:shardSellRate(bz, S, p.out, 1)?.perHr || 0, runs:0, cur:{cost:0, revenue:0}});
+  }
+  const used = {}, room = o => Math.min(Infinity, ...Object.entries(o.per).map(([id, n]) => Math.floor(((bz.m[S.by[id]?.bz]?.askVol || 0) / 7 * 0.25 - (used[id] || 0)) / n)));
+  const step = budget / 40; let left = budget;
+  for (let guard = 0; guard < 600 && left > 0; guard++){
+    let best = null;
+    for (const o of opts){
+      let add = Math.min(Math.max(1, Math.round(step / o.unit)), o.max - o.runs, room(o));
+      if (add < 1) continue;
+      let nx = o.at(o.runs + add), dc = nx.cost - o.cur.cost;
+      if (dc > left){ add = Math.floor(add * left / dc); if (add < 1) continue; nx = o.at(o.runs + add); dc = nx.cost - o.cur.cost; if (dc > left) continue; }
+      const gain = nx.revenue - o.cur.revenue - dc;
+      if (gain < 0.05 * dc) continue;   // under 5% back on these coins: not worth tying them up
+      const days = Math.max(0.25, (o.runs + add) * o.p.q / Math.max(1e-9, o.rate) / 24);   // when the last of them sells
+      const score = gain / dc / days;
+      if (!best || score > best.score) best = {o, add, nx, dc, score};
+    }
+    if (!best) break;
+    const {o, add, nx, dc} = best;
+    for (const [id, n] of Object.entries(o.per)) used[id] = (used[id] || 0) + n * add;
+    o.runs += add; o.cur = nx; left -= dc;
+  }
+  // crumbs (under 1% of the budget) aren't worth a separate listing
+  for (const o of opts) if (o.runs && o.cur.cost < budget * 0.01){ left += o.cur.cost; o.runs = 0; }
+  const picks = opts.filter(o => o.runs).map(o => ({p:o.p, mode:o.mode, B:o.cur})).sort((a, b) => b.B.cost - a.B.cost);
+  // for comparison: the whole budget in the single bought plan that profits most, however long it takes to sell
+  const solo = opts.filter(o => o.mode === "buy").map(o => ({o, B:budgetPlan(S, bz, o.q, "farm", budget, 1e5, true)})).filter(x => x.B.runs).sort((a, b) => b.B.profit - a.B.profit)[0];
+  return {picks, spent:budget - left, left, profit:picks.reduce((a, x) => a + x.B.profit, 0), solo:solo && {p:solo.o.p, B:solo.B, sellH:shardSellRate(bz, S, solo.o.p.out, solo.B.runs * solo.B.q)?.fastH || 0}};
+}
+// one line comparing the plan with putting everything into the single best shard
+function soloTxt(S, sp, lastH){
+  const x = sp.solo; if (!x || sp.picks.length < 2) return "";
+  const name = shardName(S.by[x.p.out]), d = x.B.profit - sp.profit, slower = x.sellH / Math.max(0.1, lastH);
+  const vs = Math.abs(d) < 0.05 * sp.profit ? "about the same" : d > 0 ? `${fmt(d)} more on paper` : `${fmt(-d)} less`;
+  return `<div class="small" style="margin-top:6px">⚖ <b>All in one shard instead?</b> The best is ${x.B.runs * x.B.q > 0 ? `${(x.B.runs * x.B.q).toLocaleString("en-US")}× ` : ""}${name}: spend ${fmt(x.B.cost)} → +${fmt(x.B.profit)} (${vs}), but it takes ~${hrsTxt(x.sellH)} to sell${slower >= 1.5 ? ` (${slower.toFixed(1)}× as long)` : ""}${x.B.thin ? ", more than its order book lists" : ""}.
+    <span class="muted">${slower >= 1.5 ? "Listing that much of one shard also makes other sellers undercut you, so its price tends to fall before it all sells. The split gets your coins back sooner, so you can run it again." : "Here it barely matters which you pick."}</span></div>`;
+}
+function spreadHTML(S, bz, sp, budget, u){
+  if (!sp) return "";
+  if (!sp.picks.length) return `<div class="card"><b>💼 Your plan for ${fmt(budget)}</b> <span class="muted">· nothing profitable fits this budget right now.</span></div>`;
+  const N = id => shardName(S.by[id]);
+  let lastH = 0;
+  const rows = sp.picks.map(({p, mode, B}) => {
+    const r = shardSellRate(bz, S, p.out, B.runs * B.q), farmH = Object.entries(B.farm).reduce((a, [id, n]) => a + n / Math.max(1e-9, (S.by[id].rate || 0) * u.speed / 100), 0);
+    lastH = Math.max(lastH, r?.fastH || 0);
+    return `<tr><td>${(B.runs * B.q).toLocaleString("en-US")}× <b>${N(p.out)}</b><div class="muted small">sell offer @ ${fmt(p.sell)} · ${B.runs.toLocaleString("en-US")} fusion${B.runs === 1 ? "" : "s"}</div></td>
+      <td class="small">${mode === "farm" ? `🏹 You farm ${Object.keys(p.need.farm).map(N).join(" + ")} <span class="muted">(~${dur(3600 * farmH)})</span>, buy the rest` : "🛒 Buy everything"}<div class="muted">${Object.entries(B.buy).map(([id, n]) => `${n.toLocaleString("en-US")}× ${N(id)}`).join(" + ")}</div></td>
+      <td>${fmt(B.cost)}<div class="muted small">${(B.cost / budget * 100).toFixed(0)}% of budget</div>${B.thin ? '<div class="small" style="color:var(--warn)" title="More than the order book shows, so the price may climb">⚠ thin book</div>' : ""}</td>
+      <td class="good">+${fmt(B.profit)}<div class="muted small">${(B.profit / Math.max(1, B.cost) * 100).toFixed(0)}% back</div></td>
+      <td class="small">${r ? `~${hrsTxt(r.fastH)}<div class="muted">~${hrsTxt(r.slowH)} behind what's listed</div>` : ""}</td>
+      <td class="small"><details><summary>Steps</summary>${budgetHTML(S, bz, mode === "buy" ? {...p, buyAll:true} : p, "farm", B.cost, B.runs, true, u.speed / 100)}</details></td></tr>`;
+  }).join("");
+  const why = sp.left < Math.max(1, budget * 0.03) ? "" : `<br><span class="muted">${fmt(sp.left)} isn't used: more would mean buying deeper into the order books or listing more than these markets buy in a day, for under 5% back.</span>`;
+  return `<div class="card best"><div class="muted small">💼 YOUR PLAN FOR ${esc(fmt(budget))}${parseCoins(u.budget) ? "" : " (PURSE + BANK)"}</div>
+    <div style="font-size:16px;margin:4px 0">Make and sell <b>${sp.picks.length} shard${sp.picks.length === 1 ? "" : "s"}</b>: spend <b>${fmt(sp.spent)}</b> → <span class="good" style="font-weight:700">+${fmt(sp.profit)}</span> once it all sells <span class="muted small">(~+${fmt(sp.profit * REALISTIC)} realistically)</span></div>
+    <p class="muted small" style="margin:0 0 8px">Coins go a little at a time to whichever plan returns the most per coin, counting how long its shards take to sell. So no single shard gets more than its market takes, and your coins come back sooner. ${sp.picks.some(x => x.mode === "farm") ? `Your ${u.hours}h of farming go to one plan; the rest is bought (other players did the farming).` : "Everything is bought, so no farming needed."}</p>
+    <table><thead><tr><th>Make → sell</th><th>Get the inputs</th><th>Spend</th><th>Profit</th><th>Sells in</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="small" style="margin-top:8px">If you stay the cheapest offer, everything is sold in about <b>${hrsTxt(lastH)}</b>.${why}${soloTxt(S, sp, lastH)}</div></div>`;
+}
 function moneyHTML2(S, bz, u){
   const f0 = moneyFindings(S, bz, u), age = Math.round((Date.now() - bz.t) / 1000), sortBy = u.sort || "mix";
   // worth / borderline stay split by coins per hour; within each, the chosen sort (the mix is scored across both)
@@ -3535,7 +3695,7 @@ function moneyHTML2(S, bz, u){
   const steps = p => `<ul class="chain small"><li>⚗ Final fusion: ${p.fa}× ${N(p.a)} + ${p.fb}× ${N(p.b)} → <b>${p.q}×</b> ${N(p.out)} <span class="muted">sell offer @ ${fmt(p.sell)}</span>
     <ul>${p.a === p.b ? farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.a, p.fa + p.fb) : farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.a, p.fa) + farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.b, p.fb)}</ul></li></ul>
     <div class="small" style="margin:6px 0">${routeTxt(p)}</div>
-    ${budgetHTML(S, bz, p.route === "buy" ? {...p, buyAll:true} : p, "farm", budget, (p.route === "buy" ? p.buyRuns : p.runsHr) * u.hours, true, u.speed / 100)}`;
+    ${budgetHTML(S, bz, p.route === "buy" ? {...p, buyAll:true} : p, "farm", budget, (p.route === "buy" ? p.buyRuns : p.runsHr) * u.hours, true, u.speed / 100)}${splitHTML(S, bz, p, budget, u.hours)}`;
   const list = (o, icon) => Object.entries(o).map(([id, n]) => `${fmt(n)}× ${N(id)}`).join(" + ");
   const routeTxt = p => p.route === "buy"
     ? `🛒 <b>Just buy the ${list(p.need.farm)}</b> instead of farming: buying everything makes <b class="good">+${fmt(p.buyProfit)}</b> per fusion. ${p.buyProfit >= 0.8 * p.profit ? `Farming them saves only ${fmt(p.farmBuy)} per fusion (they'd sell for ${fmt(p.farmVal)}), so it isn't worth the time.` : `Farming saves ${fmt(p.farmBuy)} per fusion, but it's the slow part: farming you'd do about ${fmt(p.runsHr)} fusions an hour, buying about ${fmt(p.buyRuns)} (as many as the market takes). Buy these and use your farming time for something else.`}`
@@ -3554,7 +3714,7 @@ function moneyHTML2(S, bz, u){
   const head = `<thead><tr><th>Farm or buy</th><th>Also buy (per run)</th><th>Make → sell offer</th><th>Realistic /hr</th><th>Profit per fusion</th><th></th></tr></thead>`;
   const top = f.worth[0] || f.border[0];
   const histNote = f.histLoading ? `<div class="muted small" style="margin-bottom:8px">⏳ Checking the past week's prices, so the ranking may still change…</div>` : "";
-  return `${histNote}${top ? `<div class="card best"><div class="muted small">${sortBy === "hour" ? "BEST PLAN RIGHT NOW" : `TOP PLAN · sorted by ${esc((MONEY_SORTS.find(x => x[0] === sortBy) || [, ""])[1]).toLowerCase()}`}</div>
+  return `${histNote}${spreadHTML(S, bz, spreadBudget(S, bz, [...f0.worth, ...f0.border], budget, Math.max(0.5, +u.hours || 2)), budget, u)}${top ? `<div class="card best" style="margin-top:12px"><div class="muted small">${sortBy === "hour" ? "BEST PLAN RIGHT NOW" : `TOP PLAN · sorted by ${esc((MONEY_SORTS.find(x => x[0] === sortBy) || [, ""])[1]).toLowerCase()}`}</div>
       <div style="font-size:16px;margin:4px 0">${top.route === "buy" ? "Buy" : "Farm"} <b>${Object.keys(top.need.farm).map(N).join(" + ")}</b>${top.route === "buy" ? "" : ` <span class="muted small">📍 ${areaOf(top)}</span>`} → fuse into <b>${N(top.out)}</b> → sell offer</div>
       <div><span class="good" style="font-size:22px;font-weight:700">~${fmt(top.real)}/hour</span> <span class="muted">realistic · +${fmt(top.route === "buy" ? top.buyProfit : top.gain)} per fusion${top.route === "buy" ? ", no farming needed" : " over selling what you farm"}</span></div>
       ${steps(top)}</div>` : `<div class="msg">Nothing clears the bar right now with these settings. Try a higher speed or more chain steps, or check back after prices move.</div>`}
