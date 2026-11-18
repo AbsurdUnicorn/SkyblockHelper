@@ -41,5 +41,5 @@ Needs a Java 25 runtime to run Gradle (the Modrinth app ships one); Gradle downl
 gradlew build
 ```
 
-The mod is `build/libs/skyblock-helper-link-1.0.0.jar`. Put it in your Fabric 26.2 profile's `mods` folder
+The mod is `build/libs/skyblock-helper-link-1.0.1.jar`. Put it in your Fabric 26.2 profile (Fabric Loader 0.19 or later)'s `mods` folder
 together with Fabric API.
