@@ -307,6 +307,7 @@ label.inline input{width:64px;margin:0 2px}
 .pill.warn{background:#4a3a12;color:#ffd27a;border-color:#6b5418}
 .mbudget{margin-top:10px;padding:8px 12px;border-left:3px solid var(--accent);background:var(--panel2);border-radius:8px}
 .mbudget ol{margin:6px 0;padding-left:20px}.mbudget li{margin:2px 0}
+.shop{margin:6px 0;padding-left:20px}.shop li{margin:3px 0}.shop li.done{opacity:.5;text-decoration:line-through}.shop input{vertical-align:middle;margin:0 4px 0 0}
 .mtool{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:0 0 12px}
 .mtool label{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
 .mtool input[data-filter]{min-width:220px}
@@ -3996,6 +3997,75 @@ function soloTxt(S, sp, lastH){
   return `<div class="small" style="margin-top:6px">⚖ <b>All in one shard instead?</b> The best is ${x.B.runs * x.B.q > 0 ? `${(x.B.runs * x.B.q).toLocaleString("en-US")}× ` : ""}${name}: spend ${fmt(x.B.cost)} → +${fmt(x.B.profit)} (${vs}), but it takes ~${hrsTxt(x.sellH)} to sell${slower >= 1.5 ? ` (${slower.toFixed(1)}× as long)` : ""}${x.B.thin ? ", more than its order book lists" : ""}.
     <span class="muted">${slower >= 1.5 ? "Listing that much of one shard also makes other sellers undercut you, so its price tends to fall before it all sells. The split gets your coins back sooner, so you can run it again." : "Here it barely matters which you pick."}</span></div>`;
 }
+// ---------- shopping lists and pinned plans ----------
+// A plan's exact list (what to buy, farm, fuse and sell) from budgetPlan's result. A pinned plan is a frozen copy of
+// that list, so it stays exactly as it was while you work through it, with tick boxes, even if the recommendations
+// change or the plan drops out of them.
+const PIN_CAND = {}, SHOP_TEXT = {};
+const pinsGet = () => store.get("moneyPins", []);
+const shopItem = (p, mode, B) => ({out:p.out, mode, a:p.a, b:p.b, fa:p.fa, fb:p.fb, q:B.q, sell:p.sell, listed:p.listed || p.sell, runs:B.runs, buy:B.buy, each:B.each, farm:B.farm,
+  fuse:Object.fromEntries(Object.entries(B.fuse).map(([id, f]) => [id, {runs:f.runs, a:f.a, b:f.b, fa:f.fa, fb:f.fb, q:f.q}])), cost:B.cost, revenue:B.revenue});
+function pinButton(key, title, items){
+  PIN_CAND[key] = {key, title, items};
+  return pinsGet().some(x => x.key === key) ? '<span class="pill" title="Pinned at the top of this page">📌 pinned</span>' : `<button class="mini" data-pin="${esc(key)}" title="Keep this exact list at the top while you work through it, even if the recommendations change">📌 Pin</button>`;
+}
+// one list for several plans: buys and farming added up, then each plan's fusions and sell offer
+function shopListHTML(S, items, id, done = {}){
+  const nm = x => S.by[x]?.name || x, N = x => S.by[x] ? shardName(S.by[x]) : esc(x), nf = n => Math.round(n).toLocaleString("en-US");
+  const buy = {}, farm = {};
+  for (const it of items){
+    for (const [x, n] of Object.entries(it.buy)){ const b = buy[x] ||= {n:0, cost:0}; b.n += n; b.cost += n * (it.each[x] || 0); }
+    for (const [x, n] of Object.entries(it.farm)) farm[x] = (farm[x] || 0) + n;
+  }
+  const lines = [], text = [];
+  const add = (key, html, txt) => { lines.push([key, html]); text.push(txt); };
+  for (const [x, b] of Object.entries(buy).sort((a, c) => c[1].cost - a[1].cost)) add("b|" + x, `🛒 Buy <b>${nf(b.n)}×</b> ${N(x)} <span class="muted">avg ${fmt(b.cost / b.n)} = ${fmt(b.cost)}</span>`, `Buy ${nf(b.n)}x ${nm(x)} (avg ${fmt(b.cost / b.n)}, ${fmt(b.cost)})`);
+  for (const [x, n] of Object.entries(farm)) add("f|" + x, `🏹 Farm <b>${nf(n)}×</b> ${N(x)}`, `Farm ${nf(n)}x ${nm(x)}`);
+  for (const it of items){
+    for (const [x, f] of Object.entries(it.fuse).reverse()) add(`x|${it.out}|${x}`, `⚗ Fuse <b>${nf(f.runs)}×</b> ${f.fa}× ${N(f.a)} + ${f.fb}× ${N(f.b)} → ${nf(f.runs * f.q)}× ${N(x)}`, `Fuse ${nf(f.runs)}x: ${f.fa} ${nm(f.a)} + ${f.fb} ${nm(f.b)} -> ${nf(f.runs * f.q)} ${nm(x)}`);
+    add("z|" + it.out, `⚗ Fuse <b>${nf(it.runs)}×</b> ${it.fa}× ${N(it.a)} + ${it.fb}× ${N(it.b)} → ${nf(it.runs * it.q)}× ${N(it.out)}`, `Fuse ${nf(it.runs)}x: ${it.fa} ${nm(it.a)} + ${it.fb} ${nm(it.b)} -> ${nf(it.runs * it.q)} ${nm(it.out)}`);
+    add("s|" + it.out, `🏷 Sell offer <b>${nf(it.runs * it.q)}×</b> ${N(it.out)} @ ${fmt(it.sell)}`, `Sell offer ${nf(it.runs * it.q)}x ${nm(it.out)} @ ${fmt(it.sell)}`);
+  }
+  const cost = items.reduce((a, it) => a + it.cost, 0), rev = items.reduce((a, it) => a + it.revenue, 0);
+  text.push(`Spend ${fmt(cost)} -> get back ${fmt(rev)} after tax = +${fmt(rev - cost)}`);
+  SHOP_TEXT[id] = text.join("\n");
+  const nDone = lines.filter(([k]) => done[k]).length;
+  return `<ol class="small shop">${lines.map(([k, h]) => `<li${done[k] ? ' class="done"' : ""}>${id.startsWith("pin") ? `<label><input type="checkbox" data-pinchk="${esc(id)}|${esc(k)}"${done[k] ? " checked" : ""}> ${h}</label>` : h}</li>`).join("")}</ol>
+    <div class="small">Spend <b>${fmt(cost)}</b> → get back <b>${fmt(rev)}</b> after tax = <b class="good">+${fmt(rev - cost)}</b>${nDone ? ` · <span class="muted">${nDone} of ${lines.length} steps done</span>` : ""} <button class="mini ghost" data-copylist="${esc(id)}">📋 Copy as text</button></div>`;
+}
+function pinnedHTML(S, bz){
+  const pins = pinsGet(); if (!pins.length) return "";
+  return pins.map(pin => {
+    // today's prices for what you're going to sell, against the prices when you pinned
+    const moved = pin.items.map(it => { const r = shardSellRate(bz, S, it.out, 0); const now = r ? (r.mine?.cheapest ? r.mine.othersAsk || r.ask : r.ask) : 0; const was = it.listed || it.sell; return now && Math.abs(now / was - 1) > 0.1 ? `${shardName(S.by[it.out])} lists at ${fmt(now)} now (was ${fmt(was)})` : ""; }).filter(Boolean);
+    return `<div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)"><div class="small muted">📌 PINNED ${hrsTxt((Date.now() - pin.at) / 3600e3)} ago · this list stays as it was <button class="mini ghost" data-unpin="${pin.id}" style="float:right">Unpin</button></div>
+      <div style="font-size:15px;margin:4px 0"><b>${esc(pin.title)}</b></div>
+      ${moved.length ? `<div class="small" style="color:var(--warn)">⚠ Prices moved since you pinned: ${moved.join("; ")}.</div>` : ""}
+      <details data-k="pin|${pin.id}" open><summary class="small">Shopping list</summary>${shopListHTML(S, pin.items, "pin" + pin.id, pin.done || {})}</details></div>`;
+  }).join("");
+}
+document.addEventListener("click", e => {
+  const pin = e.target.closest("[data-pin]"), un = e.target.closest("[data-unpin]"), cp = e.target.closest("[data-copylist]");
+  if (pin){
+    e.preventDefault(); const c = PIN_CAND[pin.dataset.pin]; if (!c) return;
+    const pins = pinsGet().filter(x => x.key !== c.key);
+    pins.unshift({id:Date.now(), key:c.key, title:c.title, at:Date.now(), items:c.items, done:{}});
+    store.set("moneyPins", pins.slice(0, 8)); MONEY_REDRAW?.(); window.scrollTo({top:0, behavior:"smooth"});
+  } else if (un){ e.preventDefault(); store.set("moneyPins", pinsGet().filter(x => String(x.id) !== un.dataset.unpin)); MONEY_REDRAW?.(); }
+  else if (cp){
+    e.preventDefault(); const t = SHOP_TEXT[cp.dataset.copylist]; if (!t) return;
+    navigator.clipboard?.writeText(t).then(() => { cp.textContent = "✓ Copied"; setTimeout(() => { cp.textContent = "📋 Copy as text"; }, 1500); }).catch(() => {});
+  }
+});
+document.addEventListener("change", e => {
+  const c = e.target.closest?.("[data-pinchk]"); if (!c) return;
+  const [id, key] = c.dataset.pinchk.split(/\|(.*)/s);
+  c.closest("li")?.classList.toggle("done", c.checked);
+  if (!id.startsWith("pin")) return;   // only pinned lists remember their ticks
+  const pins = pinsGet(), p = pins.find(x => "pin" + x.id === id); if (!p) return;
+  (p.done ||= {})[key] = c.checked; if (!c.checked) delete p.done[key];
+  store.set("moneyPins", pins);
+});
 function spreadHTML(S, bz, sp, budget, u){
   if (!sp) return "";
   if (!sp.picks.length) return `<div class="card"><b>💼 Your plan for ${fmt(budget)}</b> <span class="muted">· nothing profitable fits this budget right now.</span></div>`;
@@ -4009,14 +4079,16 @@ function spreadHTML(S, bz, sp, budget, u){
       <td>${fmt(B.cost)}<div class="muted small">${(B.cost / budget * 100).toFixed(0)}% of budget</div>${B.thin ? '<div class="small" style="color:var(--warn)" title="More than the order book shows, so the price may climb">⚠ thin book</div>' : ""}</td>
       <td class="good">+${fmt(B.profit)}<div class="muted small">${(B.profit / Math.max(1, B.cost) * 100).toFixed(0)}% back</div></td>
       <td class="small">${r ? `~${hrsTxt(r.fastH)}<div class="muted">~${hrsTxt(r.slowH)} behind what's listed</div>` : ""}</td>
-      <td class="small"><details><summary>Steps</summary>${budgetHTML(S, bz, mode === "buy" ? {...p, buyAll:true} : p, "farm", B.cost, B.runs, true, u.speed / 100)}</details></td></tr>`;
+      <td class="small"><details data-k="s|${p.out}|${mode}"><summary>Steps</summary>${budgetHTML(S, bz, mode === "buy" ? {...p, buyAll:true} : p, "farm", B.cost, B.runs, true, u.speed / 100)}</details>${pinButton(`s|${p.out}|${mode}`, `${(B.runs * B.q).toLocaleString("en-US")}× ${S.by[p.out].name}`, [shopItem(p, mode, B)])}</td></tr>`;
   }).join("");
   const why = sp.left < Math.max(1, budget * 0.03) ? "" : `<br><span class="muted">${fmt(sp.left)} isn't used: more would mean buying deeper into the order books or listing more than these markets buy in a day, for under 5% back.</span>`;
   return `<div class="card best"><div class="muted small">💼 YOUR PLAN FOR ${esc(fmt(budget))}${parseCoins(u.budget) ? "" : " (PURSE + BANK)"}</div>
     <div style="font-size:16px;margin:4px 0">Make and sell <b>${sp.picks.length} shard${sp.picks.length === 1 ? "" : "s"}</b>: spend <b>${fmt(sp.spent)}</b> → <span class="good" style="font-weight:700">+${fmt(sp.profit)}</span> once it all sells <span class="muted small">(~+${fmt(sp.profit * REALISTIC)} realistically)</span></div>
     <p class="muted small" style="margin:0 0 8px">Coins go a little at a time to whichever plan returns the most per coin, counting how long its shards take to sell. So no single shard gets more than its market takes, and your coins come back sooner. ${sp.picks.some(x => x.mode === "farm") ? `Your ${u.hours}h of farming go to one plan; the rest is bought (other players did the farming).` : "Everything is bought, so no farming needed."}</p>
     <table><thead><tr><th>Make → sell</th><th>Get the inputs</th><th>Spend</th><th>Profit</th><th>Sells in</th><th></th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="small" style="margin-top:8px">If you stay the cheapest offer, everything is sold in about <b>${hrsTxt(lastH)}</b>.${why}${soloTxt(S, sp, lastH)}</div></div>`;
+    <div class="small" style="margin-top:8px">If you stay the cheapest offer, everything is sold in about <b>${hrsTxt(lastH)}</b>.${why}${soloTxt(S, sp, lastH)}</div>
+    ${(() => { const items = sp.picks.map(({p, mode, B}) => shopItem(p, mode, B)), key = "plan|" + sp.picks.map(x => x.p.out + x.mode + x.B.runs).join(",");
+      return `<details data-k="shoplist" style="margin-top:8px"><summary><b>🧾 Full shopping list</b> <span class="muted small">(everything above in one list)</span></summary>${shopListHTML(S, items, "plan")}</details><div style="margin-top:6px">${pinButton(key, `Budget plan: ${sp.picks.length} shard${sp.picks.length === 1 ? "" : "s"} for ${fmt(sp.spent)}`, items)} <span class="muted small">pins the whole plan as a frozen checklist</span></div>`; })()}</div>`;
 }
 function moneyHTML2(S, bz, u){
   const f0 = moneyFindings(S, bz, u), age = Math.round((Date.now() - bz.t) / 1000), sortBy = u.sort || "mix";
@@ -4030,7 +4102,7 @@ function moneyHTML2(S, bz, u){
   const steps = p => `<ul class="chain small"><li>⚗ Final fusion: ${p.fa}× ${N(p.a)} + ${p.fb}× ${N(p.b)} → <b>${p.q}×</b> ${N(p.out)} <span class="muted">sell offer @ ${fmt(p.sell)}</span>
     <ul>${p.a === p.b ? farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.a, p.fa + p.fb) : farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.a, p.fa) + farmTreeHTML(S, bz, {buy:"instant", buyAll:p.route === "buy"}, p.C, p.b, p.fb)}</ul></li></ul>
     <div class="small" style="margin:6px 0">${routeTxt(p)}</div>
-    ${budgetHTML(S, bz, p.route === "buy" ? {...p, buyAll:true} : p, "farm", budget, (p.route === "buy" ? p.buyRuns : p.runsHr) * u.hours, true, u.speed / 100)}${splitHTML(S, bz, p, budget, u.hours)}`;
+    ${budgetHTML(S, bz, p.route === "buy" ? {...p, buyAll:true} : p, "farm", budget, (p.route === "buy" ? p.buyRuns : p.runsHr) * u.hours, true, u.speed / 100)}${splitHTML(S, bz, p, budget, u.hours)}${(() => { const q = p.route === "buy" ? {...p, buyAll:true} : p, B = budgetPlan(S, bz, q, "farm", budget, (p.route === "buy" ? p.buyRuns : p.runsHr) * u.hours, true); return B.runs ? `<div style="margin-top:6px">${pinButton(`f|${p.out}|${p.a}|${p.b}|${p.route}`, `${(B.runs * B.q).toLocaleString("en-US")}× ${S.by[p.out].name} (${p.route === "buy" ? "buy everything" : "farm " + Object.keys(p.need.farm).map(x => S.by[x].name).join(" + ")})`, [shopItem(p, p.route === "buy" ? "buy" : "farm", B)])} <span class="muted small">keeps this exact list at the top while you do it</span></div>` : ""; })()}`;
   const list = (o, icon) => Object.entries(o).map(([id, n]) => `${fmt(n)}× ${N(id)}`).join(" + ");
   const routeTxt = p => p.route === "buy"
     ? `🛒 <b>Just buy the ${list(p.need.farm)}</b> instead of farming: buying everything makes <b class="good">+${fmt(p.buyProfit)}</b> per fusion. ${p.buyProfit >= 0.8 * p.profit ? `Farming them saves only ${fmt(p.farmBuy)} per fusion (they'd sell for ${fmt(p.farmVal)}), so it isn't worth the time.` : `Farming saves ${fmt(p.farmBuy)} per fusion, but it's the slow part: farming you'd do about ${fmt(p.runsHr)} fusions an hour, buying about ${fmt(p.buyRuns)} (as many as the market takes). Buy these and use your farming time for something else.`}`
@@ -4049,7 +4121,7 @@ function moneyHTML2(S, bz, u){
   const head = `<thead><tr><th>Farm or buy</th><th>Also buy (per run)</th><th>Make → sell offer</th><th>Realistic /hr</th><th>Profit per fusion</th><th></th></tr></thead>`;
   const top = f.worth[0] || f.border[0];
   const histNote = f.histLoading ? `<div class="muted small" style="margin-bottom:8px">⏳ Checking the past week's prices, so the ranking may still change…</div>` : "";
-  return `${linkHTML(S, u)}${histNote}${spreadHTML(S, bz, spreadBudget(S, bz, [...f0.worth, ...f0.border], budget, Math.max(0.5, +u.hours || 2)), budget, u)}${top ? `<div class="card best" style="margin-top:12px"><div class="muted small">${sortBy === "hour" ? "BEST PLAN RIGHT NOW" : `TOP PLAN · sorted by ${esc((MONEY_SORTS.find(x => x[0] === sortBy) || [, ""])[1]).toLowerCase()}`}</div>
+  return `${linkHTML(S, u)}${pinnedHTML(S, bz)}${histNote}${spreadHTML(S, bz, spreadBudget(S, bz, [...f0.worth, ...f0.border], budget, Math.max(0.5, +u.hours || 2)), budget, u)}${top ? `<div class="card best" style="margin-top:12px"><div class="muted small">${sortBy === "hour" ? "BEST PLAN RIGHT NOW" : `TOP PLAN · sorted by ${esc((MONEY_SORTS.find(x => x[0] === sortBy) || [, ""])[1]).toLowerCase()}`}</div>
       <div style="font-size:16px;margin:4px 0">${top.route === "buy" ? "Buy" : "Farm"} <b>${Object.keys(top.need.farm).map(N).join(" + ")}</b>${top.route === "buy" ? "" : ` <span class="muted small">📍 ${areaOf(top)}</span>`} → fuse into <b>${N(top.out)}</b> → sell offer</div>
       <div><span class="good" style="font-size:22px;font-weight:700">~${fmt(top.real)}/hour</span> <span class="muted">realistic · +${fmt(top.route === "buy" ? top.buyProfit : top.gain)} per fusion${top.route === "buy" ? ", no farming needed" : " over selling what you farm"}</span></div>
       ${steps(top)}</div>` : `<div class="msg">Nothing clears the bar right now with these settings. Try a higher speed or more chain steps, or check back after prices move.</div>`}
@@ -4094,6 +4166,10 @@ function moneyPane(){
     <div id="moneyOut"><div class="muted">Loading live Bazaar prices…</div></div>`;
 }
 let MONEY_TIMER = null, MONEY_REDRAW = null;
+// which collapsible parts of the money pane you have open: kept across every redraw (live prices, history loading,
+// the game link) and across rebuilding the whole page
+const MONEY_OPEN = new Set(store.get("moneyOpen", []));
+const moneyKey = d => d.dataset.k || "t|" + (d.querySelector("summary")?.textContent || "").trim().slice(0, 60);
 function initMoney(S, an){
   const read = () => ({speed:+$("#muSpeed").value, hours:+$("#muHours").value, depth:+$("#muDepth").value, multi:$("#muMulti").checked, live:$("#muLive").checked, q:$("#muQ").value, budget:$("#muBudget").value, sort:$("#muSort").value,
     borderline:!!$("#borderBox")?.open, myRates:$("#muMyRates") ? $("#muMyRates").checked : (store.get("moneyUI", {}).myRates ?? true)});
@@ -4104,9 +4180,10 @@ function initMoney(S, an){
       if (!$("#moneyOut")) return;
       const u = read(); store.set("moneyUI", u);
       const el = $("#moneyOut");
-      const open = new Set([...el.querySelectorAll("details[data-k][open]")].map(d => d.dataset.k)), wide = new Set([...el.querySelectorAll("table[id].all")].map(t => t.id));
+      const wide = new Set([...el.querySelectorAll("table[id].all")].map(t => t.id)), y = window.scrollY;
       el.innerHTML = moneyHTML2(S, bz, u);
-      el.querySelectorAll("details[data-k]").forEach(d => { if (open.has(d.dataset.k)) d.open = true; });
+      el.querySelectorAll("details").forEach(d => { if (MONEY_OPEN.has(moneyKey(d))) d.open = true; });
+      if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y);   // stay where you were reading
       wide.forEach(id => el.querySelector("#" + id)?.classList.add("all"));
       loadShardHist(S, moneyFindings(S, bz, u).histIds, () => { if ($("#moneyOut")) draw(false); });
       limitRows(el);
@@ -4114,6 +4191,11 @@ function initMoney(S, an){
     } catch(e){ console.error(e); outEl.innerHTML = `<div class="msg err">Couldn't load Bazaar prices: ${esc(e.message)}</div>`; }
   };
   MONEY_REDRAW = () => { if ($("#moneyOut")) draw(false); };
+  $("#moneyOut").addEventListener("toggle", e => {
+    const d = e.target; if (d.tagName !== "DETAILS" || d.id === "borderBox") return;
+    const k = moneyKey(d); if (d.open) MONEY_OPEN.add(k); else MONEY_OPEN.delete(k);
+    store.set("moneyOpen", [...MONEY_OPEN].slice(-200));
+  }, true);
   ["#muSpeed", "#muHours", "#muDepth", "#muMulti", "#muLive", "#muSort"].forEach(s => $(s).addEventListener("change", () => draw(false)));
   $("#muQ").addEventListener("input", () => draw(false));
   $("#muBudget").addEventListener("change", () => draw(false));
