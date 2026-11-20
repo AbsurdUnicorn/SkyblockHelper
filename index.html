@@ -654,11 +654,18 @@ async function buildState(R, profile, museum, uuid){
                    inv.inv_armor?.data, inv.equipment_contents?.data, inv.wardrobe_contents?.data,
                    ...Object.values(inv.backpack_contents || {}).map(b => b?.data)];
   const owned = [], items = {};
+  const mfg = st.mfGear = {looting:0, lootingOn:"", clover:false, pulse:0, anguish:0};   // Magic Find gear (see viewMF)
   for (const s of sources){
     try {
       for (const item of await decodeInventory(s)){
         const ea = item.tag?.ExtraAttributes; if (!ea?.id) continue;
         items[ea.id] = (items[ea.id] || 0) + (item.Count || 1);
+        const nm = String(item.tag?.display?.Name || "").replace(/§./g, "");
+        const lt = Object.entries(ea.enchantments || {}).find(([k]) => /^looting/i.test(k));
+        if (lt && +lt[1] > mfg.looting){ mfg.looting = +lt[1]; mfg.lootingOn = nm; }
+        if (ea.id === "CLOVER_HELMET") mfg.clover = true;
+        if (ea.id === "PULSE_RING"){ const ch = +ea.thunder_charge || 0; mfg.pulse = Math.max(mfg.pulse, /Heirloom/.test(nm) || ch >= 5e6 ? 4 : /Relic/.test(nm) || ch >= 1e6 ? 3 : /Artifact/.test(nm) || ch >= 150e3 ? 2 : 1); }
+        const ag = ["ANGUISH_TALISMAN", "ANGUISH_RING", "ANGUISH_ARTIFACT"].indexOf(ea.id); if (ag >= 0) mfg.anguish = Math.max(mfg.anguish, ag + 1);
         if (R.byId[ea.id]?.category === "ACCESSORY") owned.push({id:ea.id, recomb: !!ea.rarity_upgrades});
       }
     } catch(e){ console.warn("inventory decode failed", e); }
@@ -667,6 +674,7 @@ async function buildState(R, profile, museum, uuid){
   st.ownedAccessories = owned;
   st.items = items; // everything you're carrying, in storage or in sacks
   st.mpReported = me.accessory_bag_storage?.highest_magical_power;
+  st.powerSel = String(me.accessory_bag_storage?.selected_power || "").toLowerCase(); st.powersUnlocked = (me.accessory_bag_storage?.unlocked_powers || []).map(x => String(x).toLowerCase());
   st.museumOwned = new Set(Object.keys(mm?.items || {}));   // donated items still count as owned for gear checklists
   st.shardSrc = collectShardSrc(me);
   st.hotfSrc = {...collectKeys(me, /forest|foraging_core|hotf|whisper|starlyn/i), skill_tree_foraging:{experience:me.skill_tree?.experience?.foraging}};
@@ -694,6 +702,7 @@ function demoState(R){
   st.bestiary = {}; Object.values(RARE_MOBS).flat().forEach(([, keys]) => keys.forEach(k => st.bestiary[k] = Math.floor(rnd() * rnd() * 400)));
   st.pets = PET_LIST.filter(() => rnd() < 0.35).map(([type, rar]) => { const r = rar.split("").map(Number); return {type, tier:PET_TIERS[r[Math.floor(rnd() * r.length)]], exp:rnd() * rnd() * 3e7, active:false, heldItem:rnd() < 0.3 ? "PET_ITEM_COMBAT_SKILL_BOOST_EPIC" : null, candyUsed:rnd() < 0.1 ? 3 : 0}; });
   st.pets.push({type:"SCATHA", tier:"EPIC", exp:4.1e6, active:true}, {type:"BABY_YETI", tier:"LEGENDARY", exp:2.6e7});
+  st.mfGear = {looting:5, lootingOn:"Livid Dagger", clover:false, pulse:2, anguish:1};
   st.raw = {
     mining_core:{experience:612000, tokens_spent:15, powder_mithril:420000, powder_spent_mithril:5.1e6, powder_gemstone:310000, powder_spent_gemstone:7.4e6, powder_glacite:90000, powder_spent_glacite:2.2e6,
       nodes:{mining_speed:50, mining_fortune:50, special_0:6, titanium_insanium:30, daily_powder:1, mining_madness:1, great_explorer:20, professional:140, powder_buff:50, mole:120, fortunate:20, efficient_miner:100},
@@ -1661,6 +1670,65 @@ function fusableNow(S, an){
   return out;
 }
 
+// Fusions that move your attributes forward using shards you already own.
+// A shard you own is "spare" when its own attribute doesn't need it: that attribute is maxed, the shard can't be
+// syphoned, or you have more than it needs to reach level 10. (Tick "also use shards my attributes need" to allow the rest.)
+// For every shard you haven't maxed, each recipe is tried with both inputs from your spare shards, or one from them and
+// the partner bought on the Bazaar. The best step overall is taken first (new attributes, then the most levels for
+// the fewest coins), its shards are set aside, and it repeats, so no two suggestions count the same shards.
+// new attributes first, then the most levels per coin (a million coins counts like one level), then the cheapest
+// (levels counted net of what your own attributes lose by using up their shards)
+const goalBetter = (x, y) => { const ex = x.net / (1 + x.cost / 1e6), ey = y.net / (1 + y.cost / 1e6); return x.unlock !== y.unlock ? x.unlock : ex !== ey ? ex > ey : x.cost < y.cost; };
+function goalFusions(S, an, useAll){
+  const left = {}, extra = {}, bought = {}, usedAll = {};
+  for (const r of an.rows) left[r.s.id] = useAll || r.s.noSyph || r.level >= 10 ? r.loose : Math.max(0, r.loose - r.toMax);
+  const lvl = (t, n) => t.s.cum.filter(c => t.count + n >= c).length;   // level once n shards are syphoned
+  const targets = an.rows.filter(t => !t.s.noSyph && t.level < 10);
+  const recipes = new Map(targets.map(t => [t.s.id, Object.entries(S.rec[t.s.id] || {}).flatMap(([q, pairs]) => pairs.filter(([a, b]) => a !== t.s.id && b !== t.s.id && an.byId[a] && an.byId[b]).map(([a, b]) => ({a, b, q:+q, fa:S.by[a].fuse || 5, fb:S.by[b].fuse || 5})))]));
+  const steps = [];
+  for (let guard = 0; guard < 80; guard++){
+    let best = null;
+    for (const t of targets){
+      const have = t.loose + (extra[t.s.id] || 0), want = Math.max(0, t.toMax - have); if (!want) continue;
+      const from = lvl(t, have);
+      for (const R of recipes.get(t.s.id)){
+        const opts = [];
+        if (R.a === R.b) opts.push({runs:Math.floor(left[R.a] / (R.fa + R.fb)), buy:null});
+        else {
+          opts.push({runs:Math.min(Math.floor(left[R.a] / R.fa), Math.floor(left[R.b] / R.fb)), buy:null});
+          if (an.byId[R.b].price) opts.push({runs:Math.floor(left[R.a] / R.fa), buy:R.b});   // yours + bought partner
+          if (an.byId[R.a].price) opts.push({runs:Math.floor(left[R.b] / R.fb), buy:R.a});
+        }
+        for (const o of opts){
+          const runs = Math.min(o.runs, Math.ceil(want / R.q)); if (runs < 1) continue;
+          const made = runs * R.q, to = lvl(t, have + made); if (to <= from) continue;   // must give at least a level
+          const nBuy = o.buy ? runs * (o.buy === R.a ? R.fa : R.fb) : 0, cost = o.buy ? nBuy * an.byId[o.buy].price : 0;
+          // levels your own attributes lose by giving up these shards (none when they're spare)
+          const uses = {}; if (R.a === R.b) uses[R.a] = runs * (R.fa + R.fb); else { if (o.buy !== R.a) uses[R.a] = runs * R.fa; if (o.buy !== R.b) uses[R.b] = runs * R.fb; }
+          let lost = 0; const lostOn = [];
+          for (const [id, n] of Object.entries(uses)){
+            const r = an.byId[id]; if (r.s.noSyph || r.level >= 10) continue;
+            const pool = r.loose + (extra[id] || 0) - (usedAll[id] || 0), d = lvl(r, pool) - lvl(r, pool - n);
+            if (d > 0){ lost += d; lostOn.push([id, lvl(r, pool), lvl(r, pool - n)]); }
+          }
+          const net = to - from - lost; if (net < 1) continue;   // only when it comes out ahead
+          const step = {t, R, runs, made, buy:o.buy, nBuy, cost, from, to, lost, lostOn, uses, net, unlock:from === 0, direct:t.price ? made * t.price : null};
+          if (!best || goalBetter(step, best)) best = step;
+        }
+      }
+    }
+    if (!best) break;
+    const {R} = best;
+    if (R.a === R.b) left[R.a] -= best.runs * (R.fa + R.fb);
+    else { if (best.buy !== R.a) left[R.a] -= best.runs * R.fa; if (best.buy !== R.b) left[R.b] -= best.runs * R.fb; }
+    extra[best.t.s.id] = (extra[best.t.s.id] || 0) + best.made;
+    for (const [id, n] of Object.entries(best.uses)) usedAll[id] = (usedAll[id] || 0) + n;
+    if (best.buy) bought[best.buy] = (bought[best.buy] || 0) + best.nBuy;
+    steps.push(best);
+  }
+  return steps;
+}
+
 function shardDescHTML(s, level){
   if (!s.desc.length) return "";
   return s.desc.map(t => {
@@ -1821,6 +1889,8 @@ async function fillShards(){
     const fus = fusableNow(S, an).sort((a, b) => (a.r.level >= 10) - (b.r.level >= 10) || b.value - a.value);
     const canFuse = new Set(fus.map(x => x.r.s.id));
     const excl = rows.filter(r => r.s.fusionOnly);
+    const goalAll = store.get("goalUseAll", false), gsteps = goalFusions(S, an, goalAll);
+    const gCost = gsteps.reduce((a, x) => a + x.cost, 0), gLv = gsteps.reduce((a, x) => a + x.net, 0), gNew = gsteps.filter(x => x.unlock).length;
 
     const rarOpts = ["", ...Object.keys(SHARD_LVL)].map(r => `<option value="${r}">${r ? r[0] + r.slice(1).toLowerCase() : "All rarities"}</option>`).join("");
     const cats = [...new Set(S.list.map(s => s.cat))].filter(Boolean).sort();
@@ -1836,7 +1906,7 @@ async function fillShards(){
         ${syphNow.map(r => { const reach = r.s.cum.filter(c => r.count + r.loose >= c).length; return `<tr><td>${shardName(r.s)}<div class="muted small">${esc(r.s.attr)}</div></td><td>${lvlDots(r.level)} ${r.level}</td><td>${fmt(r.loose)}</td><td class="good">→ ${reach}${reach >= 10 ? " max" : ""}</td></tr>`; }).join("") || `<tr><td colspan="4" class="muted">Nothing to syphon right now.</td></tr>`}
         </tbody></table></div>
         ${syphWait.length ? `<p class="small" style="margin-top:8px">🔒 <b>You have enough to syphon these, but your Hunting level is too low:</b> ${syphWait.map(r => `${esc(r.s.name)} (Hunting ${r.huntReq})`).join(", ")}. <span class="muted">Uncommon needs Hunting 5, Rare 10, Epic 15, Legendary 20; attributes from before Hunting existed may have no requirement.</span></p>` : ""}</div>
-      <div><h3 class="ph">Cheapest new attributes</h3>
+      <div><h3 class="ph">Cheapest new attributes</h3>${gsteps.length ? `<p class="small">🎯 <b>${gsteps.length} fusion${gsteps.length === 1 ? "" : "s"}</b> from shards you own would add ${gNew ? `${gNew} new attribute${gNew === 1 ? "" : "s"} and ` : ""}+${gLv} levels: see Fusions → For your attributes.</p>` : ""}
         <p class="muted small">Level 1 gives the effect for just 1 shard, so unlocking new attributes is the cheapest progress.</p>
         <div class="card"><table data-limit="8"><thead><tr><th>Shard</th><th>Effect (lv 1)</th><th>Get it</th></tr></thead><tbody>
         ${unlock.map(r => `<tr><td>${shardName(r.s)}</td><td class="small"><b>${esc(r.s.attr)}</b><div>${shardDescHTML(r.s, 1)}</div></td><td class="small">${getVia(S, r)}${r.s.where.find(w => w.place && w.method !== "Fusion") ? `<div class="muted">📍 ${esc(r.s.where.find(w => w.place && w.method !== "Fusion").place)}</div>` : ""}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">No priced shards left to unlock.</td></tr>`}
@@ -1872,15 +1942,29 @@ async function fillShards(){
           <td class="small">${fz ? `${A.fuse}× ${shardName(A)} + ${B.fuse}× ${shardName(B)}<div class="muted">→ ${fz.qty} · ≈ ${fmt(fz.cost)} each${r.price && r.price < fz.cost ? ` (Bazaar ${fmt(r.price)} is cheaper)` : ""}</div>` : r.price ? `Bazaar ${fmt(r.price)}` : '<span class="muted">No priced recipe</span>'}</td>
           <td>${r.level >= 10 ? '<span class="good">maxed</span>' : r.bestCost ? fmt(Math.max(0, r.toMax - r.loose) * r.bestCost) : "—"}</td></tr>`; }).join("") || `<tr><td colspan="5" class="muted">No fusion-only shards found.</td></tr>`}
       </tbody></table></div>`;
+    const goalHTML2 = `<p class="muted small">Fusions that unlock or level your attributes using shards you already own. ${goalAll ? "Any loose shard may be used, even ones your own attributes still need." : "Only <b>spare</b> shards are used: ones whose own attribute is maxed, can't be syphoned, or that you have more of than it needs to reach level 10."} When you own one side of a recipe, the partner can be bought on the Bazaar. Shards are shared out in order, so no two rows count the same shards. Syphon what you make into its attribute.</p>
+      <div class="toolbar"><label class="chk"><input type="checkbox" id="goUseAll"${goalAll ? " checked" : ""}> Also use shards my own attributes still need</label>
+        <span class="muted small">${gsteps.length ? `${gsteps.length} fusion${gsteps.length === 1 ? "" : "s"}: ${gNew} new attribute${gNew === 1 ? "" : "s"}, +${gLv} levels in total (after what it uses up), ${gCost ? fmt(gCost) + " coins for partners" : "no coins needed"}` : ""}</span></div>
+      <div class="card"><table id="goaltab" data-limit="15"><thead><tr><th>Make</th><th>Fusions</th><th>Use yours</th><th>Buy</th><th>Attribute</th><th>vs buying it</th></tr></thead><tbody>
+      ${gsteps.map(x => { const A = S.by[x.R.a], B = S.by[x.R.b], useA = x.buy === x.R.a ? 0 : x.runs * (x.R.a === x.R.b ? x.R.fa + x.R.fb : x.R.fa), useB = x.buy === x.R.b || x.R.a === x.R.b ? 0 : x.runs * x.R.fb;
+        return `<tr><td>${shardName(x.t.s)}${x.unlock ? ' <span class="pill p-high">new</span>' : ""}<div class="muted small">${x.R.fa}× ${esc(A.name)} + ${x.R.fb}× ${esc(B.name)} → ${x.R.q}</div></td>
+        <td><b>${x.runs}×</b> → ${fmt(x.made)}</td>
+        <td class="small">${[useA && `${fmt(useA)}× ${shardName(A)} <span class="muted">(have ${an.byId[A.id].loose})</span>`, useB && `${fmt(useB)}× ${shardName(B)} <span class="muted">(have ${an.byId[B.id].loose})</span>`].filter(Boolean).join("<br>")}</td>
+        <td class="small">${x.buy ? `${fmt(x.nBuy)}× ${shardName(S.by[x.buy])}<div class="muted">≈ ${fmt(x.cost)}</div>` : '<span class="muted">nothing</span>'}</td>
+        <td class="small"><b>${esc(x.t.s.attr)}</b><div>${lvlDots(x.to)} ${x.from} → <b>${x.to}</b>${x.to >= 10 ? " max" : ""}</div>${x.lost ? `<div style="color:var(--warn)">but ${x.lostOn.map(([id, a, b]) => `${esc(S.by[id].attr || S.by[id].name)} ${a} → ${b}`).join(", ")} (those shards are used up)</div>` : ""}</td>
+        <td class="small">${x.direct ? (x.cost < x.direct ? `<span class="good">saves ${fmt(x.direct - x.cost)}</span>` : `<span style="color:var(--warn)">buying ${fmt(x.made)} costs only ${fmt(x.direct)}</span>`) : '<span class="muted">not on the Bazaar</span>'}</td></tr>`; }).join("") || `<tr><td colspan="6" class="muted">${goalAll ? "No fusion from your loose shards levels an attribute right now." : "No spare shards make a fusion that levels an attribute. Tick the box above to also use shards your attributes still need."}</td></tr>`}
+      </tbody></table></div>`;
     const fusions = `<div class="toolbar seg">
         <button data-fview="now" class="${fview === "now" ? "on" : ""}">Can fuse now <span class="cnt">${fus.length}</span></button>
         <button data-fview="excl" class="${fview === "excl" ? "on" : ""}">⚗ Fusion-exclusive shards <span class="cnt">${excl.length}</span></button>
+        <button data-fview="goal" class="${fview === "goal" ? "on" : ""}">🎯 For your attributes <span class="cnt">${gsteps.length}</span></button>
         <span class="sp"></span>
         <label class="chk" data-for="now"><input type="checkbox" id="fuExcl"> Only fusion-exclusive</label>
         <label class="chk" data-for="excl"><input type="checkbox" id="exHide"> Hide maxed</label>
         <input id="fuQ" placeholder="Filter…" size="14"></div>
       <div data-fpane="now" ${fview === "now" ? "" : "hidden"}>${fuseNow}</div>
-      <div data-fpane="excl" ${fview === "excl" ? "" : "hidden"}>${exclHTML}</div>`;
+      <div data-fpane="excl" ${fview === "excl" ? "" : "hidden"}>${exclHTML}</div>
+      <div data-fpane="goal" ${fview === "goal" ? "" : "hidden"}>${goalHTML2}</div>`;
 
     const where = `<p class="muted small">Shards grouped by area, so you can collect several in one trip. Areas with the most shards you still need come first. For "Charm" and Black Hole / Lasso sources the area is where that mob usually lives.</p>
       <div class="toolbar"><label class="chk"><input type="checkbox" id="whNeed"> Only shards I still need</label>
@@ -1950,6 +2034,7 @@ async function fillShards(){
     $("#fuExcl").checked = !!ff0.onlyEx; $("#exHide").checked = !!ff0.hide;
     out.querySelectorAll(".seg [data-fview]").forEach(b => b.addEventListener("click", () => { store.set("fuseView", b.dataset.fview); fapply(); }));
     ["#fuExcl", "#exHide"].forEach(sel => $(sel).addEventListener("change", fapply)); $("#fuQ").addEventListener("input", fapply);
+    $("#goUseAll")?.addEventListener("change", e => { store.set("goalUseAll", e.target.checked); fillShards(); });
     fapply();
 
     // Where to hunt
@@ -3441,6 +3526,7 @@ function chainCounts(S, C, id, amount, acc){
 // p: a plan with a, b, fa, fb, C and the result's q (or n) and sell price; maxRuns: what the market (and your farming time) can take
 function budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy){
   const q = p.q || p.n, walk = kind === "farm" ? farmCounts : chainCounts;
+  const listed = id => askDepth(bz.m[S.by[id]?.bz]);
   const counts = runs => {
     const acc = {buy:{}, farm:{}, fuse:{}};
     if (p.a === p.b) walk(S, p.C, p.a, runs * (p.fa + p.fb), acc); else { walk(S, p.C, p.a, runs * p.fa, acc); walk(S, p.C, p.b, runs * p.fb, acc); }
@@ -3453,16 +3539,29 @@ function budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy){
     }
     return {...acc, each, cost, thin, runs};
   };
-  const hi = Math.max(1, Math.floor(maxRuns));
-  let best = counts(hi), why = maxRuns < 1 || p.buyAll ? "market" : kind === "farm" ? "time" : "market";
-  if (budget > 0 && best.cost > budget){
+  let hi = Math.max(1, Math.floor(maxRuns)), short = null;
+  // instant buys: only what's listed. Past that the price is unknown and the shards may simply not be there.
+  if (instantBuy){
+    const over = r => Object.entries(counts(r).buy).find(([id, n]) => n > listed(id));
+    const o = over(hi);
+    if (o){
+      short = {id:o[0], listed:listed(o[0])};
+      let lo = 0, top = hi - 1;   // the most fusions everything listed covers
+      while (lo < top){ const mid = Math.ceil((lo + top) / 2); if (!over(mid)) lo = mid; else top = mid - 1; }
+      hi = lo;
+    }
+  }
+  let best = hi ? counts(hi) : {...counts(1), runs:0}, why = short ? "book" : maxRuns < 1 || p.buyAll ? "market" : kind === "farm" ? "time" : "market";
+  if (hi && budget > 0 && best.cost > budget){
     let lo = 0, top = hi;   // largest run count the budget covers
     while (lo < top){ const mid = Math.ceil((lo + top) / 2); if (counts(mid).cost <= budget) lo = mid; else top = mid - 1; }
     best = lo ? counts(lo) : {...counts(1), runs:0}; why = "budget";
   }
   const sellTotal = best.runs * q * p.sell * (1 - 0.0125);
-  return {...best, q, why, revenue:sellTotal, profit:sellTotal - (best.runs ? best.cost : 0), first:counts(1).cost};
+  return {...best, q, why, short, revenue:sellTotal, profit:sellTotal - (best.runs ? best.cost : 0), first:counts(1).cost};
 }
+// how many of a Bazaar item sellers have listed right now (the order book the API shows)
+const askDepth = m => (m?.askBook || []).reduce((a, [, k]) => a + k, 0);
 // Splitting the buying. One recipe means buying every input from one or two shards, which walks up those order books.
 // So the order is filled in small chunks, each from the cheapest source right now: the result can be fused from
 // several pairs, and each input can be bought or itself fused from cheaper shards (one level down). What's already
@@ -3489,7 +3588,7 @@ function shardRecipes(S, bz, id, k){
 function splitBuy(S, bz, p, maxOut, budget){
   const tax = 1 - 0.0125, top = shardRecipes(S, bz, p.out, 10);
   if (!top.length || !(maxOut >= 1)) return null;
-  const used = {}, spare = {}, subs = {}, cap = id => (bz.m[S.by[id].bz].askVol || 0) / 7 * 0.25;
+  const used = {}, spare = {}, subs = {}, cap = id => { const m = bz.m[S.by[id].bz]; return Math.min((m.askVol || 0) / 7 * 0.25, askDepth(m)); };
   const subOf = id => subs[id] ||= shardRecipes(S, bz, id, 4).filter(r => !(p.out in r.need));
   // cheapest way to get n of a shard right now: buy from its book, or fuse it (depth levels down)
   const src = (id, n, depth) => {
@@ -3623,8 +3722,10 @@ function sellRateHTML(bz, S, id, qty, priced){
 function budgetHTML(S, bz, p, kind, budget, maxRuns, instantBuy, speed){
   const N = id => shardName(S.by[id]);
   const B = budgetPlan(S, bz, p, kind, budget, maxRuns, instantBuy);
-  if (!B.runs) return `<div class="mbudget"><b>💰 Budget ${fmt(budget)}:</b> <span class="bad">not enough for one run</span> <span class="muted">(one run costs about ${fmt(B.first)})</span></div>`;
-  const why = {budget:"your budget is the limit", time:"that's what you can farm in your hours a day and the market can take", market:"that's about what the market takes in a day"}[B.why];
+  if (!B.runs) return B.short ? `<div class="mbudget"><b>💰 Budget ${fmt(budget)}:</b> <span class="bad">not enough ${N(B.short.id)} listed for one run</span> <span class="muted">(only ${fmt(B.short.listed)} for sale right now)</span></div>`
+    : `<div class="mbudget"><b>💰 Budget ${fmt(budget)}:</b> <span class="bad">not enough for one run</span> <span class="muted">(one run costs about ${fmt(B.first)})</span></div>`;
+  const why = {budget:"your budget is the limit", time:"that's what you can farm in your hours a day and the market can take", market:"that's about what the market takes in a day",
+    book:B.short ? `that's all the ${shardNameTxt(S, B.short.id)} sellers have listed right now: ${fmt(B.short.listed)}` : "that's all that's listed right now"}[B.why];
   const farmH = Object.entries(B.farm).reduce((a, [id, n]) => a + n / Math.max(1e-9, (S.by[id].rate || 0) * speed), 0);
   const fuses = Object.entries(B.fuse).reverse();   // deepest fusions first
   return `<div class="mbudget"><b>💰 With ${fmt(budget)}:</b> do <b>${fmt(B.runs)} run${B.runs === 1 ? "" : "s"}</b> <span class="muted small">(${why})</span>
@@ -3700,7 +3801,7 @@ function linkParse(e){
   if ((x = m.match(/^\[Bazaar\] Claimed ([\d,.]+) coins from selling ([\d,]+)x (.+?) at ([\d,.]+) each/))) return {t, k:"claim", side:"sell", coins:linkNum(x[1]), n:linkNum(x[2]), name:x[3].trim(), each:linkNum(x[4])};
   if ((x = m.match(/^\[Bazaar\] Claimed ([\d,]+)x (.+?) worth ([\d,.]+) coins bought for ([\d,.]+) each/))) return {t, k:"claim", side:"buy", coins:linkNum(x[3]), n:linkNum(x[1]), name:x[2].trim(), each:linkNum(x[4])};
   if ((x = m.match(/^\[Bazaar\] (Sold|Bought) ([\d,]+)x (.+?) for ([\d,.]+) coins/))) return {t, k:"instant", side:x[1] === "Sold" ? "sell" : "buy", n:linkNum(x[2]), name:x[3].trim(), coins:linkNum(x[4])};
-  if ((x = m.match(/^((?:VERY |CRAZY )?RARE|INSANE|PRAY TO RNGESUS) DROP! (.+?)(?: \(\+[\d,.]+ ?✯? ?Magic Find\))?$/))) return {t, k:"drop", tier:x[1], name:x[2]};
+  if ((x = m.match(/^((?:VERY |CRAZY )?RARE|INSANE|PRAY TO RNGESUS) DROP! (.+?)(?: \(\+([\d,.]+) ?✯? ?Magic Find\))?$/))) return {t, k:"drop", tier:x[1], name:x[2], mf:x[3] ? linkNum(x[3]) : null};
   return null;
 }
 // sessions: runs of events with under `gap` between them; returns [{t0, t1, items}]
@@ -3962,15 +4063,18 @@ function spreadBudget(S, bz, plans, budget, hrs){
     const per = {...p.need.buy}; if (mode === "buy") for (const [id, n] of Object.entries(p.need.farm)) per[id] = (per[id] || 0) + n;
     opts.push({p, mode, q, at, unit:one.cost, per, max:Math.floor((mode === "buy" ? p.buyRuns : p.runsHr) * hrs), rate:shardSellRate(bz, S, p.out, 1)?.perHr || 0, runs:0, cur:{cost:0, revenue:0}});
   }
-  const used = {}, room = o => Math.min(Infinity, ...Object.entries(o.per).map(([id, n]) => Math.floor(((bz.m[S.by[id]?.bz]?.askVol || 0) / 7 * 0.25 - (used[id] || 0)) / n)));
+  const used = {}, room = o => Math.min(Infinity, ...Object.entries(o.per).map(([id, n]) => { const m = bz.m[S.by[id]?.bz]; return Math.floor((Math.min((m?.askVol || 0) / 7 * 0.25, askDepth(m)) - (used[id] || 0)) / n); }));
   const step = budget / 40; let left = budget;
   for (let guard = 0; guard < 600 && left > 0; guard++){
     let best = null;
     for (const o of opts){
       let add = Math.min(Math.max(1, Math.round(step / o.unit)), o.max - o.runs, room(o));
       if (add < 1) continue;
-      let nx = o.at(o.runs + add), dc = nx.cost - o.cur.cost;
+      let nx = o.at(o.runs + add);
+      if (nx.runs < o.runs + add){ add = nx.runs - o.runs; if (add < 1) continue; }   // capped by what's listed
+      let dc = nx.cost - o.cur.cost;
       if (dc > left){ add = Math.floor(add * left / dc); if (add < 1) continue; nx = o.at(o.runs + add); dc = nx.cost - o.cur.cost; if (dc > left) continue; }
+      if (nx.runs <= o.runs || !(dc > 0)) continue;
       const gain = nx.revenue - o.cur.revenue - dc;
       if (gain < 0.05 * dc) continue;   // under 5% back on these coins: not worth tying them up
       const days = Math.max(0.25, (o.runs + add) * o.p.q / Math.max(1e-9, o.rate) / 24);   // when the last of them sells
@@ -3979,8 +4083,9 @@ function spreadBudget(S, bz, plans, budget, hrs){
     }
     if (!best) break;
     const {o, add, nx, dc} = best;
-    for (const [id, n] of Object.entries(o.per)) used[id] = (used[id] || 0) + n * add;
-    o.runs += add; o.cur = nx; left -= dc;
+    const got = nx.runs - o.runs;   // what was actually affordable and listed
+    for (const [id, n] of Object.entries(o.per)) used[id] = (used[id] || 0) + n * got;
+    o.runs = nx.runs; o.cur = nx; left -= dc;
   }
   // crumbs (under 1% of the budget) aren't worth a separate listing
   for (const o of opts) if (o.runs && o.cur.cost < budget * 0.01){ left += o.cur.cost; o.runs = 0; }
@@ -3997,6 +4102,7 @@ function soloTxt(S, sp, lastH){
   return `<div class="small" style="margin-top:6px">⚖ <b>All in one shard instead?</b> The best is ${x.B.runs * x.B.q > 0 ? `${(x.B.runs * x.B.q).toLocaleString("en-US")}× ` : ""}${name}: spend ${fmt(x.B.cost)} → +${fmt(x.B.profit)} (${vs}), but it takes ~${hrsTxt(x.sellH)} to sell${slower >= 1.5 ? ` (${slower.toFixed(1)}× as long)` : ""}${x.B.thin ? ", more than its order book lists" : ""}.
     <span class="muted">${slower >= 1.5 ? "Listing that much of one shard also makes other sellers undercut you, so its price tends to fall before it all sells. The split gets your coins back sooner, so you can run it again." : "Here it barely matters which you pick."}</span></div>`;
 }
+const shardNameTxt = (S, id) => S.by[id]?.name || id;
 // ---------- shopping lists and pinned plans ----------
 // A plan's exact list (what to buy, farm, fuse and sell) from budgetPlan's result. A pinned plan is a frozen copy of
 // that list, so it stays exactly as it was while you work through it, with tick boxes, even if the recommendations
@@ -4041,6 +4147,10 @@ function pinnedHTML(S, bz){
     return `<div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)"><div class="small muted">📌 PINNED ${hrsTxt((Date.now() - pin.at) / 3600e3)} ago · this list stays as it was <button class="mini ghost" data-unpin="${pin.id}" style="float:right">Unpin</button></div>
       <div style="font-size:15px;margin:4px 0"><b>${esc(pin.title)}</b></div>
       ${moved.length ? `<div class="small" style="color:var(--warn)">⚠ Prices moved since you pinned: ${moved.join("; ")}.</div>` : ""}
+      ${(() => { const need = {}, done = pin.done || {};
+        for (const it of pin.items) for (const [id, n] of Object.entries(it.buy)) if (!done["b|" + id]) need[id] = (need[id] || 0) + n;
+        const shortL = Object.entries(need).map(([id, n]) => { const have = askDepth(bz.m[S.by[id]?.bz]); return have < n ? `${shardName(S.by[id])}: need ${fmt(n)}, only <b>${fmt(have)}</b> listed` : ""; }).filter(Boolean);
+        return shortL.length ? `<div class="small" style="color:var(--warn)">⚠ Not enough for sale right now: ${shortL.join("; ")}. Buy what's there, then put a buy order in for the rest (it fills as people sell), or do fewer of the fusions that need it.</div>` : ""; })()}
       <details data-k="pin|${pin.id}" open><summary class="small">Shopping list</summary>${shopListHTML(S, pin.items, "pin" + pin.id, pin.done || {})}</details></div>`;
   }).join("");
 }
@@ -5907,7 +6017,7 @@ function saveHistory(key, snap){
 let CUR = null; // {st, A, hist}
 const TAB_GROUPS = [["Overview", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"],["history","📈 History"]]],
   ["Progress", [["sblevel","⭐ SkyBlock Level"],["skills","📊 Skills"],["coll","📦 Collections"],["bestiary","👾 Bestiary"],["pets","🐾 Pets"],["museum","🏛 Museum"],["acc","💍 Accessories"],["minions","🤖 Minions"],["upgrades","⬆ Upgrades"],["shards","🔮 Shards"]]],
-  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"]]], ["Islands", [["garden","🌾 Farming & Garden"],["fishing","🎣 Fishing"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["crimson","🔥 Crimson Isle"],["rift","🌀 Rift"]]],
+  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"],["mf","✨ Magic Find"]]], ["Islands", [["garden","🌾 Farming & Garden"],["fishing","🎣 Fishing"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["crimson","🔥 Crimson Isle"],["rift","🌀 Rift"]]],
   ["Money", [["money","💰 Money"],["plan","🛒 Plan"],["auto","🤖 Auto bulk plan"]]]];
 const TABS = TAB_GROUPS.flatMap(g => g[1]);
 let tab = store.get("tab", "focus");
@@ -5953,7 +6063,7 @@ function render(){
   const v = $("#view");
   const off = st.apiOff.length ? `<div class="msg err">No data for: <b>${st.apiOff.map(esc).join(", ")}</b>. Turn on these API settings in-game (SkyBlock Menu → Settings → API Settings), wait a few minutes, then reload.</div>` : "";
   const demo = st.demo ? `<div class="demo-note">🧪 Showing made-up demo data. Enter your username and API key above to see your own profile.</div>` : "";
-  v.innerHTML = demo + off + ({focus:viewFocus, money:viewMoney, sblevel:viewSbLevel, crimson:viewCrimson, map:viewMap, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, history:viewHistory}[tab])(st, A);
+  v.innerHTML = demo + off + ({focus:viewFocus, money:viewMoney, sblevel:viewSbLevel, crimson:viewCrimson, map:viewMap, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, mf:viewMF, history:viewHistory}[tab])(st, A);
   limitRows(v);
   setTimeout(fillShardCtx, 0);
   v.querySelectorAll("[data-filter]").forEach(inp => inp.addEventListener("input", () => filterTable(inp)));
@@ -6130,10 +6240,125 @@ function viewAcc(st, A){
     {id:"up", label:"Upgrades", count:ups.length, html:upHTML},
     {id:"miss", label:"Missing families", count:miss.length, html:missHTML},
     {id:"tips", label:"Milestones & tips", html:accGuideHTML(st, C, "tips")},
+    {id:"powers", label:"💎 Powers", html:powersHTML(st, C)},
   ])}
   <div data-shard-ctx="accessories" data-title="Shards for accessories"></div>
   <p class="muted small">Families (Talisman → Ring → Artifact → Relic) are detected from item names, so a few may be grouped wrongly. Only the best accessory in each family counts. Owned accessories are read from your accessory bag, inventory, ender chest and backpacks.</p>`;
 }
+
+// ---------- Accessory Bag powers (Maxwell): compare them by the stats you want ----------
+// From the wiki: the default powers (Powers/List of Accessory Powers) and the stone powers (the wiki's "power" data,
+// with each stone's stats and Unique Power Bonus). A power's stats grow with your Accessory Power:
+//   multiplier = 29.97 × ln(0.0019 × AP + 1)^1.2
+//   default powers: stat = base × multiplier
+//   stone powers:   stat = base ÷ 100 × the stat's factor × 24 × multiplier   (Module:Power)
+// The Unique Power Bonus is flat and only applies while that power is selected.
+const POW = {data:null, loading:false, err:null};
+const POW_STAT_FACTOR = {Health:1.4, Defense:1, Strength:1, Speed:0.5, "Crit Chance":0.4, "Crit Damage":1, Intelligence:1.5, "True Defense":0.17, "Attack Speed":0.3};   // Module:Stat/Data
+const POW_SHORT = {hp:"Health", def:"Defense", str:"Strength", spd:"Speed", int:"Intelligence", cc:"Crit Chance", cd:"Crit Damage", as:"Attack Speed", td:"True Defense", fer:"Ferocity", mf:"Magic Find"};
+const POW_STATS = ["Strength", "Crit Damage", "Crit Chance", "Speed", "Health", "Defense", "Intelligence", "Attack Speed", "True Defense", "Ferocity", "Ability Damage", "Combat Wisdom"];
+const POW_ABBR = {Strength:"Str", "Crit Damage":"CD", "Crit Chance":"CC", Speed:"Spd", Health:"HP", Defense:"Def", Intelligence:"Int", "Attack Speed":"AS", "True Defense":"TD", Ferocity:"Fero", "Ability Damage":"AbD", "Combat Wisdom":"CW"};
+const POW_PRESETS = [["Lots of strength, a little speed", {Strength:{w:3}, Speed:{w:1, cap:20}}], ["Damage (strength + crit damage)", {Strength:{w:1}, "Crit Damage":{w:1}}], ["Mage (intelligence)", {Intelligence:{w:1}}], ["Tank (health + defense)", {Health:{w:1}, Defense:{w:1}}], ["Speed", {Speed:{w:1}}]];
+const powMult = ap => 29.97 * Math.pow(Math.log(0.0019 * Math.max(0, +ap || 0) + 1), 1.2);
+async function powLoad(){
+  if (POW.loading || POW.data) return; POW.loading = true;
+  try {
+    const titles = ["Powers/List of Accessory Powers", "Power Stones/List of Power Stones"];
+    const [pg, bk] = await Promise.all([
+      cachedJSON(WIKI_API + "?action=query&prop=revisions&rvprop=content&rvslots=main&format=json&formatversion=2&origin=*&titles=" + encodeURIComponent(titles.join("|")), 7 * 86400e3),
+      cachedJSON(WIKI_API + "?action=bucket&format=json&origin=*&query=" + encodeURIComponent("bucket('power').select('json').limit(500).run()"), 7 * 86400e3),
+      loadPrices().catch(() => null)]);
+    const page = t => (pg?.query?.pages || []).find(p => p.title === t)?.revisions?.[0]?.slots?.main?.content || "";
+    const list = [];
+    // default powers: each table row has a name, a type, the base stats (first stat list) and a requirement
+    for (const row of page(titles[0]).split(/\n\|-\n/)){
+      const name = (row.match(/\{\{TA\|([^}]+)\}\}/) || [])[1]; if (!name) continue;
+      const type = (row.match(/\|\s*(Starter|Intermediate|Advanced) Power/) || [])[1] || "";
+      const base = row.split("{{Stats List")[1] || "", stats = {};
+      for (const m of base.split("}}")[0].matchAll(/\*\+?(-?[\d.]+) (\w+)/g)){ const k = POW_SHORT[m[2]] || m[2]; stats[k] = +m[1]; }
+      const req = (row.match(/\{\{Skl\|Combat[ |]([IVXL]+)\}\}/) || [])[1];
+      list.push({name, kind:type ? type + " power" : "Default power", stats, scale:"base", bonus:{}, combat:req ? roman(req) : 0});
+    }
+    // stone powers
+    const stoneInfo = {};
+    for (const m of page(titles[1]).matchAll(/stone = ([^|]+)\|obtaining = ([\s\S]*?)\|requirement = \{\{Skl\|Combat\|([IVXL]+)\}\}/g))
+      stoneInfo[m[1].trim()] = {how:m[2].replace(/\{\{[^|}]*\|([^}|]*)[^}]*\}\}/g, "$1").replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, "$1").replace(/<br\s*\/?>/g, " ").replace(/\s+/g, " ").trim(), combat:roman(m[3])};
+    for (const r of bk?.bucket || []){
+      let d; try { d = JSON.parse(r.json); } catch { continue; }
+      if (!stoneInfo[d.power_stone]) continue;   // skips the wiki's leftover test rows
+      const stats = {}, bonus = {};
+      for (const [k, v] of Object.entries(d.stats || {})) stats[k] = +v;
+      for (const [k, v] of Object.entries(Array.isArray(d.bonus_stats) ? {} : d.bonus_stats || {})) bonus[k] = +v;
+      list.push({name:d.power_name, kind:"Stone power", stone:d.power_stone, how:stoneInfo[d.power_stone].how, combat:stoneInfo[d.power_stone].combat, stats, scale:"stone", bonus});
+    }
+    if (list.length < 10) throw new Error("the wiki's power list didn't load");
+    POW.data = list;
+  } catch (e){ POW.err = e; }
+  POW.loading = false;
+  if (tab === "acc" || document.querySelector("[data-powtab]")) render();
+}
+// a power's stats at your Accessory Power
+function powStats(p, ap){
+  const m = powMult(ap), out = {};
+  for (const [k, v] of Object.entries(p.stats)) out[k] = p.scale === "stone" ? v / 100 * (POW_STAT_FACTOR[k] ?? 1) * 24 * m : v * m;
+  return out;
+}
+const powUI = () => ({sort:"score", bonus:true, usable:false, w:{Strength:{w:3}, Speed:{w:1, cap:20}}, ...store.get("powUI", {})});
+function powersHTML(st, C){
+  if (!POW.data){ if (!POW.err) setTimeout(powLoad, 0);
+    return `<div data-powtab>${POW.err ? `<div class="msg err">Couldn't load the powers from the wiki: ${esc(POW.err.message)}</div>` : '<div class="empty">Loading the powers from the wiki…</div>'}</div>`; }
+  const u = powUI(), ap = +store.get("powAP", 0) || st.mpReported || C.mp || 0, combat = skillLv(st, "COMBAT");
+  const idOf = {}; for (const it of RES?.items || []) idOf[stripMc(it.name).toLowerCase()] = it.id;
+  const price = name => { const id = idOf[String(name).toLowerCase()]; return id ? (PRICES?.bz?.[id] || PRICES?.bin?.[id] || 0) : 0; };
+  const rows = POW.data.map(p => {
+    const sv = powStats(p, ap), tot = {...sv};
+    if (u.bonus) for (const [k, v] of Object.entries(p.bonus)) tot[k] = (tot[k] || 0) + v;
+    let score = 0;
+    for (const [k, c] of Object.entries(u.w)) if (c?.w){ const v = tot[k] || 0; score += c.w * (c.cap > 0 ? Math.min(v, c.cap) : v); }
+    const key = p.name.toLowerCase().replace(/ \(alpha\)/, "");
+    return {p, sv, tot, score, cost:p.stone ? price(p.stone) : 0, mine:st.powersUnlocked?.includes(key) || (!p.stone && p.combat <= combat), cur:st.powerSel === key, locked:p.combat > combat};
+  }).filter(r => !u.usable || !r.locked);
+  const by = u.sort === "score" ? r => r.score : u.sort === "cost" ? r => -(r.cost || Infinity) : r => r.tot[u.sort] || 0;
+  rows.sort((a, b) => by(b) - by(a) || b.score - a.score);
+  const shown = POW_STATS.filter(k => rows.some(r => r.tot[k]));
+  const head = k => `<th class="mnum clk" data-powsort="${esc(k)}" title="Sort by ${esc(k)}">${POW_ABBR[k] || esc(k)}${u.sort === k ? " ▼" : ""}</th>`;
+  const cell = (r, k) => { const v = r.sv[k] || 0, b = u.bonus ? r.p.bonus[k] || 0 : 0; const t = v + b; return `<td class="mnum${u.w[k]?.w ? "" : " muted"}">${t ? `${t > 0 ? "" : "−"}${fmt(Math.abs(Math.round(t)))}` : ""}${b ? `<div class="small muted">${fmt(Math.round(v))} + ${fmt(b)}</div>` : ""}</td>`; };
+  const wInputs = POW_STATS.slice(0, 9).map(k => `<span class="chk" style="white-space:nowrap">${POW_ABBR[k]} <input type="number" min="0" max="10" step="0.5" data-poww="${esc(k)}" value="${u.w[k]?.w || ""}" placeholder="0" style="width:46px" title="How much you want ${esc(k)} (0 = don't care)">
+    <input type="number" min="0" step="1" data-powcap="${esc(k)}" value="${u.w[k]?.cap || ""}" placeholder="max" style="width:56px" title="Need at most this much ${esc(k)}; more doesn't count"></span>`).join(" ");
+  return `<div data-powtab>
+    <div class="toolbar" style="flex-wrap:wrap;gap:8px">
+      <label class="chk">Accessory Power <input type="number" min="0" data-powap value="${ap}" style="width:70px" title="Your Accessory Power (from your profile; change it to see what more would give)"></label>
+      <span class="muted small">stats × ${powMult(ap).toFixed(1)}</span>
+      <label class="chk">Sort by <select data-powsortsel><option value="score"${u.sort === "score" ? " selected" : ""}>Best for my weights</option>${POW_STATS.map(k => `<option value="${esc(k)}"${u.sort === k ? " selected" : ""}>Most ${esc(k)}</option>`).join("")}<option value="cost"${u.sort === "cost" ? " selected" : ""}>Cheapest stone</option></select></label>
+      <label class="chk"><input type="checkbox" data-powbonus${u.bonus ? " checked" : ""}> Count the Unique Power Bonus</label>
+      <label class="chk"><input type="checkbox" data-powusable${u.usable ? " checked" : ""}> Only ones my Combat level allows (${combat})</label>
+    </div>
+    <div class="small" style="margin:6px 0"><b>What you want:</b> ${wInputs}</div>
+    <div class="small muted" style="margin-bottom:8px">Weight = how much you care (0–10); max = the most of that stat you need (more doesn't count). Presets: ${POW_PRESETS.map(([n], i) => `<a href="#" data-powpreset="${i}">${esc(n)}</a>`).join(" · ")}</div>
+    <div class="card"><table><thead><tr><th>Power</th><th>Get it</th>${shown.map(head)}<th class="mnum clk" data-powsort="score">Score${u.sort === "score" ? " ▼" : ""}</th></tr></thead><tbody>
+    ${rows.map(r => `<tr${r.cur ? ' style="background:var(--panel2)"' : ""}><td><b>${esc(r.p.name)}</b>${r.cur ? ' <span class="pill">selected</span>' : r.mine ? ' <span class="pill" title="You can pick this at Maxwell">✓ unlocked</span>' : ""}<div class="small muted">${esc(r.p.kind)}${Object.keys(r.p.bonus).length ? ` · bonus: ${Object.entries(r.p.bonus).map(([k, v]) => `+${v} ${esc(k)}`).join(", ")}` : ""}</div></td>
+      <td class="small">${r.p.stone ? `${esc(r.p.stone)}${r.cost ? ` <b>${fmt(r.cost)}</b>` : ""}<div class="muted">${esc(r.p.how || "")}</div>` : '<span class="muted">Maxwell, free</span>'}${r.p.combat ? `<div class="${r.locked ? "bad" : "muted"}">${r.locked ? "🔒 " : ""}Combat ${r.p.combat}</div>` : ""}</td>
+      ${shown.map(k => cell(r, k)).join("")}<td class="mnum"><b>${fmt(Math.round(r.score))}</b></td></tr>`).join("")}
+    </tbody></table></div>
+    <p class="muted small">At ${fmt(ap)} Accessory Power. Stats are what the power gives through your Accessory Bag; the Unique Power Bonus (shown under the total when counted) is flat and only applies while that power is selected. Tuning Points aren't included. Powers and stats from the Hypixel SkyBlock Wiki; stone prices are Bazaar or lowest BIN.</p></div>`;
+}
+document.addEventListener("change", e => {
+  const t = e.target; if (!t.closest?.("[data-powtab]")) return;
+  const u = powUI();
+  if (t.matches("[data-powap]")) store.set("powAP", +t.value || 0);
+  else if (t.matches("[data-powsortsel]")) u.sort = t.value;
+  else if (t.matches("[data-powbonus]")) u.bonus = t.checked;
+  else if (t.matches("[data-powusable]")) u.usable = t.checked;
+  else if (t.matches("[data-poww]")) (u.w[t.dataset.poww] ||= {}).w = +t.value || 0;
+  else if (t.matches("[data-powcap]")) (u.w[t.dataset.powcap] ||= {}).cap = +t.value || 0;
+  else return;
+  store.set("powUI", u); render();
+});
+document.addEventListener("click", e => {
+  const h = e.target.closest("[data-powsort]"), pr = e.target.closest("[data-powpreset]");
+  if (h){ const u = powUI(); u.sort = h.dataset.powsort; store.set("powUI", u); render(); }
+  else if (pr){ e.preventDefault(); const u = powUI(); u.w = JSON.parse(JSON.stringify(POW_PRESETS[+pr.dataset.powpreset][1])); u.sort = "score"; store.set("powUI", u); render(); }
+});
 
 const BESTIARY_BRACKETS = {"1":[20,40,60,100,200,400,800,1400,2000,3000,6000,12000,20000,30000,40000,50000,60000,72000,86000,100000,200000,400000,600000,800000,1000000],"2":[5,10,15,25,50,100,200,350,500,750,1500,3000,5000,7500,10000,12500,15000,18000,21500,25000,50000,100000,150000,200000,250000],"3":[4,8,12,16,20,40,80,140,200,300,600,1200,2000,3000,4000,5000,6000,7200,8600,10000,20000,40000,60000,80000,100000],"4":[2,4,6,10,15,20,25,35,50,75,150,300,500,750,1000,1350,1650,2000,2500,3000,5000,10000,15000,20000,25000],"5":[1,2,3,5,7,10,15,20,25,30,60,120,200,300,400,500,600,720,860,1000,2000,4000,6000,8000,10000],"6":[1,2,3,5,7,9,12,16,20,25,50,80,125,175,250,325,425,525,625,750,1500,3000,4500,6000,7500],"7":[1,2,3,5,7,9,11,14,17,20,30,40,55,75,100,150,200,275,375,500,1000,1500,2000,2500,3000],"8":[1,2,3,4,5,8,11,14,17,20,25,30,35,40,50,60,70,80,90,100,120,140,160,180,200]};
 // [name, bestiary keys, family keys if the bestiary entry is shared (else 0), bestiary cap, bracket, pet type, where/why]. From the NEU repo's bestiary.json.
@@ -6198,6 +6423,151 @@ const RARE_MOBS = {"MINING":[
   ["Slug",["pest_slug_1"],0,250,6,null,"Garden pest"]]};
 const PET_TIERS = ["COMMON","UNCOMMON","RARE","EPIC","LEGENDARY","MYTHIC"];
 const RARE_TITLE = {MINING:"⛏ Rare mining mobs", FISHING:"🎣 Rare sea creatures", COMBAT:"⚔ Bosses & rare mobs", FARMING:"🐛 Garden pests"};
+// ---------- Magic Find: what you have and the cheapest ways to get more ----------
+// Sources and values from the wiki's Magic Find page after the 0.27.3 rework (read 2026-11-20).
+// Final = (sources shown in /stats) × (1 + multipliers) + sources outside /stats (Extremely Real Shuriken), capped at 500.
+// The API shows skills, pets, shards, gear and bestiary; consumed items, buffs and the account Magic Find upgrade you tick yourself.
+const MF_COMBAT = lv => { let t = 0; for (let i = 1; i <= Math.min(60, lv); i++) t += i <= 10 ? 0.1 : i <= 20 ? 0.2 : i <= 30 ? 0.3 : i <= 40 ? 0.4 : 0.5; return Math.round(t * 10) / 10; };
+const MF_LOOT = [0, 2.5, 5, 7.5, 10, 15, 20, 25];
+const MF_PULSE = ["", "Pulse Ring", "Pulse Artifact", "Pulse Relic", "Pulse Heirloom"], MF_PULSE_UP = [0, 0, 3, 17, 80];   // Thunders in a Bottle for each step up
+const MF_ANGUISH = ["", "ANGUISH_TALISMAN", "ANGUISH_RING", "ANGUISH_ARTIFACT"];
+const MF_BEACON = ["None", "Beacon I (+0.5)", "Beacon II (+1)", "Beacon III (+1.5)", "Beacon IV (+2)", "Beacon V (+2.5)", "Beacon V + Scorched Power Crystal (+3)"], MF_BEACON_V = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+const MF_COMM_DAYS = [1, 2, 4, 8, 16];
+const MF = {mayor:undefined};
+function viewMF(){ setTimeout(fillMF, 0); return `<div id="mfOut"><div class="muted">Loading shards, prices and the mayor…</div></div>`; }
+async function fillMF(){
+  if (!$("#mfOut")) return;
+  try {
+    const [S] = await Promise.all([loadShards().catch(() => null), loadPrices().catch(() => null),
+      MF.mayor !== undefined ? null : cachedJSON(API + "/resources/skyblock/election", 15 * 60e3).then(j => MF.mayor = j?.mayor || null).catch(() => MF.mayor = null)]);
+    const out = $("#mfOut"); if (!out) return;
+    const {st} = CUR, g = st.mfGear || {looting:0, clover:false, pulse:0, anguish:0};
+    const an = S ? (SHARDS.an || (SHARDS.an = shardAnalysis(st, S))) : null;
+    const P = id => mktPrice(id);
+    const I = {gifts:0, shelf:false, ladder:false, comm:0, cookie:false, pot:0, jar:false, cake:false, beacon:0, shuriken:false, stats:"", ...store.get("mfIn", {})};
+    // what the API might show directly
+    const found = collectKeys(st.raw || {}, /divine_gift|dianas_bookshelf|necrons_ladder/i), fv = re => { const e = Object.entries(found).find(([k]) => re.test(k)); return e ? e[1] : undefined; };
+    const apiGifts = fv(/divine_gift/i), apiShelf = fv(/dianas_bookshelf/i), apiLadder = fv(/necrons_ladder/i);
+    const commApi = (st.rawProfile?.community_upgrades?.upgrade_states || []).filter(u => /magic_find/i.test(u.upgrade)).reduce((a, u) => Math.max(a, u.tier || 0), -1);
+    const gifts = apiGifts != null ? Math.min(5, Array.isArray(apiGifts) ? apiGifts.length : +apiGifts || 0) : Math.min(5, +I.gifts || 0);
+    const shelf = apiShelf != null ? !!apiShelf : !!I.shelf, ladder = apiLadder != null ? !!apiLadder : !!I.ladder;
+    const comm = commApi >= 0 ? commApi : Math.min(5, +I.comm || 0);
+    const cookie = st.raw?.profile?.cookie_buff_active != null ? !!st.raw.profile.cookie_buff_active : !!I.cookie;
+    const combat = st.skills.find(s => s.id === "COMBAT"), cLv = combat?.level || 0;
+    const D = petData(st);
+    const cinder = S?.list.find(s => s.name === "Cinderbat"), cRow = cinder && an?.byId[cinder.id];
+    const tiers = Object.keys(st.bestiary || {}).length ? allFamilies(st).reduce((a, f) => a + f.tier, 0) : 0, milestone = Math.floor(tiers / 10);
+    const codexOwned = !!(st.items || {}).BEASTSLAYERS_CODEX, codex = codexOwned && milestone >= 300 ? 1 : 0;
+    const perks = [...(MF.mayor?.perks || []), ...(MF.mayor?.minister?.perk ? [MF.mayor.minister.perk] : [])].map(p => p.name);
+    const aatrox = perks.some(n => /pathfinder/i.test(n)) ? 20 : 0, jerry = perks.some(n => /statspocalypse/i.test(n)) ? 0.1 : 0;
+    const src = (k, label) => `<span class="pill ${k === "profile" ? "p-high" : k === "game" ? "p-med" : "p-low"}">${label || k}</span>`;
+    // [name, value, max, where it came from, note]
+    const perm = [
+      ["⚔ Combat level " + cLv, MF_COMBAT(cLv), 20, src("profile"), cLv < 60 ? `+${MF_COMBAT(cLv + 1) - MF_COMBAT(cLv) > 0 ? (Math.round((MF_COMBAT(cLv + 1) - MF_COMBAT(cLv)) * 10) / 10) : 0} at Combat ${cLv + 1}` : "maxed"],
+      ["🐾 Pet Score " + D.score, D.mf, 13, src("profile"), D.nextMs ? `${D.nextMs[0] - D.score} more score for +1` : "maxed"],
+      ["🔮 Magic Find attribute (Cinderbat)", cRow ? cRow.level * 0.5 : 0, 5, cRow ? src("profile") : src("you", "unknown"), cRow ? `level ${cRow.level}/10` : "shard data didn't load"],
+      ["🏪 Community Shop: Magic Find upgrade", comm, 5, commApi >= 0 ? src("profile") : src("you", "you set"), `<input type="number" class="mfIn" data-k="comm" min="0" max="5" value="${comm}" style="width:50px"${commApi >= 0 ? " disabled" : ""}> of 5 (account-wide, free, takes time)`],
+      ["🎁 Divine Gifts eaten", gifts, 5, apiGifts != null ? src("profile") : src("you", "you set"), `<input type="number" class="mfIn" data-k="gifts" min="0" max="5" value="${gifts}" style="width:50px"${apiGifts != null ? " disabled" : ""}> of 5`],
+      ["📚 Diana's Bookshelf completed", shelf ? 1 : 0, 1, apiShelf != null ? src("profile") : src("you", "you set"), `<label class="chk"><input type="checkbox" class="mfIn" data-k="shelf"${shelf ? " checked" : ""}${apiShelf != null ? " disabled" : ""}> eaten</label>`],
+      ["🪜 Necron's Ladder completed", ladder ? 1 : 0, 1, apiLadder != null ? src("profile") : src("you", "you set"), `<label class="chk"><input type="checkbox" class="mfIn" data-k="ladder"${ladder ? " checked" : ""}${apiLadder != null ? " disabled" : ""}> eaten</label>`],
+      ["💍 Anguish accessory", [0, 0.5, 1, 1.5][g.anguish], 1.5, src("profile"), g.anguish ? nameOf(MF_ANGUISH[g.anguish]) : "none owned"],
+      ["💍 Pulse Ring line", [0, 0.5, 1, 1.5, 2][g.pulse], 2, src("profile"), g.pulse ? MF_PULSE[g.pulse] : "none owned"],
+      ["📖 Beastslayer's Codex", codex, 1, src("profile"), codexOwned ? `bestiary milestone ${milestone}/300` : `not owned (milestone ${milestone}; +1 once Mythic at 300)`],
+      ["⛑ Clover Helmet (while worn)", g.clover ? 5 : 0, 5, src("profile"), g.clover ? "owned" : "not owned"],
+      ["🗡 Looting on your weapon (while held)", MF_LOOT[Math.min(7, g.looting)] || 0, 25, src("profile"), g.looting ? `Looting ${g.looting} on ${esc(g.lootingOn || "a weapon")}` : "no Looting found"],
+    ];
+    const temp = [
+      ["🍪 Booster Cookie", cookie ? 10 : 0, 10, st.raw?.profile?.cookie_buff_active != null ? src("profile") : src("you", "you set"), `<label class="chk"><input type="checkbox" class="mfIn" data-k="cookie"${cookie ? " checked" : ""}${st.raw?.profile?.cookie_buff_active != null ? " disabled" : ""}> active</label>`],
+      ["🧪 Magic Find potion / God Potion", [0, 2.5, 5, 7.5, 10][+I.pot || 0], 10, src("you", "you set"), `<select class="mfIn" data-k="pot">${["none", "Magic Find I", "Magic Find II", "Magic Find III", "Magic Find IV or God Potion"].map((t, i) => `<option value="${i}"${+I.pot === i ? " selected" : ""}>${t}</option>`).join("")}</select>`],
+      ["🫙 Celestial Mason Jar (with a God Potion)", I.jar ? 1 : 0, 1, src("you", "you set"), `<label class="chk"><input type="checkbox" class="mfIn" data-k="jar"${I.jar ? " checked" : ""}> active</label>`],
+      ["🗼 Beacon on your island", MF_BEACON_V[+I.beacon || 0], 3, src("you", "you set"), `<select class="mfIn" data-k="beacon">${MF_BEACON.map((t, i) => `<option value="${i}"${+I.beacon === i ? " selected" : ""}>${t}</option>`).join("")}</select>`],
+      ["🎂 Century Cake of the Next Dungeon Floor", I.cake ? 1 : 0, 1, src("you", "you set"), `<label class="chk"><input type="checkbox" class="mfIn" data-k="cake"${I.cake ? " checked" : ""}> active</label>`],
+      ["👑 Mayor: Aatrox's Pathfinder", aatrox, 20, src("game", "election"), MF.mayor ? (aatrox ? "active now" : `not active (mayor: ${esc(MF.mayor.name || "?")})`) : "couldn't load the election"],
+    ];
+    const menu = [...perm, ...temp].reduce((a, r) => a + r[1], 0), shur = I.shuriken ? 5 : 0;
+    const total = Math.min(500, Math.round((menu * (1 + jerry) + shur) * 10) / 10);
+    const lastDrop = (LINK.events || []).filter(e => e.k === "drop" && e.mf != null).pop();
+    const stated = +I.stats || 0;
+
+    // ---- ways to get more: permanent first; cost per +1 Magic Find ----
+    const ups = [];
+    const add = (name, gain, cost, how, kind = "buy") => { if (gain > 0) ups.push({name, gain:Math.round(gain * 10) / 10, cost, how, kind, per:cost != null ? cost / gain : null}); };
+    if (comm < 5) add(`Community Shop Magic Find ${["I", "II", "III", "IV", "V"][comm]}`, 1, 0, `Free at Elizabeth (SkyBlock Menu → Community Shop → Account upgrades). Takes ${MF_COMM_DAYS[comm]} day${MF_COMM_DAYS[comm] === 1 ? "" : "s"} to finish.`, "free");
+    if (cLv < 60) add(`Combat ${cLv + 1}`, MF_COMBAT(cLv + 1) - MF_COMBAT(cLv), 0, `Level Combat (slayers, mobs, bestiary milestones). ${goTab("skills", "Skills")}`, "free");
+    if (cRow && cRow.level < 10){
+      const each = cRow.bestCost;
+      add(`Cinderbat attribute ${cRow.level} → ${cRow.level + 1}`, 0.5, each ? cRow.need * each : null, `${fmt(cRow.need)} Cinderbat shard${cRow.need === 1 ? "" : "s"} to syphon${each ? ` at ≈ ${fmt(each)} each${cRow.fusion && cRow.fusion.cost < (cRow.price || Infinity) ? " (cheapest by fusing)" : ""}` : ""}. ${goTab("shards", "Shards")}`);
+      if (cRow.level < 9 && each) add(`Cinderbat attribute ${cRow.level} → 10`, (10 - cRow.level) * 0.5, cRow.toMax * each, `${fmt(cRow.toMax)} shards in total to max it.`);
+    }
+    if (D.nextMs){   // cheapest pets that reach the next Pet Score milestone (one rarity per pet)
+      let need = D.nextMs[0] - D.score, cost = 0; const pick = [], used = new Set();
+      for (const o of D.opts.filter(o => o.price).sort((a, b) => a.per - b.per)){ if (need <= 0) break; if (used.has(o.type)) continue; used.add(o.type); pick.push(o); need -= o.gain; cost += o.price; }
+      if (need <= 0) add(`Pet Score ${D.nextMs[0]} (+1)`, 1, cost, `${D.nextMs[0] - D.score} more Pet Score: buy ${pick.slice(0, 5).map(o => `${esc(petName(o.type))} (${esc(prettyKey(o.tier))}, ${fmt(o.price)})`).join(", ")}${pick.length > 5 ? ` and ${pick.length - 5} more cheap pets` : ""}. ${goTab("pets", "Pets")}`);
+    }
+    if (gifts < 5) add(`Divine Gift (${gifts + 1} of 5)`, 1, P("DIVINE_GIFT") ?? 20e6, `${P("DIVINE_GIFT") ? "Bazaar" : "Regalia Room, 20M"}; eat it for a permanent +1. The Regalia Room sells 5 a SkyBlock year.`);
+    if (g.anguish < 3){ const to = 3, next = g.anguish + 1, pNext = P(MF_ANGUISH[next]), pCur = g.anguish ? P(MF_ANGUISH[g.anguish]) || 0 : 0;
+      if (pNext) add(`${nameOf(MF_ANGUISH[next])}${g.anguish ? ` (replace your ${nameOf(MF_ANGUISH[g.anguish])})` : ""}`, 0.5, Math.max(0, pNext - pCur), `Auction House, ≈ ${fmt(pNext)}${pCur ? `, minus ≈ ${fmt(pCur)} selling yours` : ""}. Also gives True Defense and Magical Power.`);
+      const pTop = P(MF_ANGUISH[to]); if (next < to && pTop) add(`Anguish Artifact${g.anguish ? ` (replace your ${nameOf(MF_ANGUISH[g.anguish])})` : ""}`, 1.5 - [0, 0.5, 1, 1.5][g.anguish], Math.max(0, pTop - pCur), `Auction House, ≈ ${fmt(pTop)}${pCur ? `, minus ≈ ${fmt(pCur)} selling yours` : ""}.`); }
+    { const per = Math.min(P("THUNDER_IN_A_BOTTLE") ?? Infinity, (P("STORM_IN_A_BOTTLE") ?? Infinity) / 10, (P("HURRICANE_IN_A_BOTTLE") ?? Infinity) / 100), via = per === P("THUNDER_IN_A_BOTTLE") ? "Thunders" : per * 10 === P("STORM_IN_A_BOTTLE") ? "Storms (1 = 10 Thunders)" : "Hurricanes (1 = 100 Thunders)";
+      if (!g.pulse && P("PULSE_RING")) add("Pulse Ring", 0.5, P("PULSE_RING"), `Auction House, or craft from 256 Orbs of Energy. Upgrades with Thunders in a Bottle for more.`);
+      else if (g.pulse && g.pulse < 4 && per < Infinity) add(`${MF_PULSE[g.pulse]} → ${MF_PULSE[g.pulse + 1]}`, 0.5, MF_PULSE_UP[g.pulse + 1] * per, `Combine with ${MF_PULSE_UP[g.pulse + 1]} Thunders in a Bottle worth of charge in an anvil; cheapest now as ${via}.`); }
+    if (g.looting < 7){
+      if (g.looting < 5) add(`Looting ${g.looting ? g.looting + " → " : ""}V`, MF_LOOT[5] - MF_LOOT[g.looting], 0, "Enchantment Table (needs Enchanting 3); costs only XP levels.", "free");
+      if (g.looting < 6) add(`Looting VI`, MF_LOOT[6] - MF_LOOT[Math.max(g.looting, 5)], P("ENCHANTMENT_LOOTING_NEW_6"), `Book from the Bazaar (≈ ${fmt(P("ENCHANTMENT_LOOTING_NEW_6"))}) or 25 North Stars at Einary. Counts on top of reaching V first.`);
+      add(`Looting VII`, MF_LOOT[7] - MF_LOOT[Math.max(g.looting, 6)], P("ENCHANTMENT_LOOTING_NEW_7"), "Book from the Bazaar. Only counts on the weapon you hold.");
+    }
+    if (!shelf) add("Diana's Bookshelf", 1, P("DIANAS_BOOKSHELF") ?? 75e6, "Buy it, then drop 6 Chimera I books from Minos Inquisitors with it in your inventory. Also +1 Tracking, +1 Taming Wisdom.", "task");
+    if (!ladder) add("Necron's Ladder", 1, P("NECRONS_LADDER") ?? 75e6, "Buy it, then find 3 Necron's Handles in dungeon chests with it in your inventory. Also +1 Health, +1 Intelligence.", "task");
+    if (!g.clover) add("Clover Helmet", 5, P("CLOVER_HELMET"), "Shen's Auction only, rarely sold. −5% to almost all other stats while worn.", "task");
+    if (!codex) add("Beastslayer's Codex at Mythic", 1, 0, `Reach bestiary milestone 300 (you're at ${milestone})${codexOwned ? "" : "; claim the Codex from Bramass Beastslayer at milestone 50"}. ${goTab("bestiary", "Bestiary")}`, "free");
+    const order = {free:0, buy:1, task:2};
+    ups.sort((a, b) => (a.kind === "free") !== (b.kind === "free") ? (a.kind === "free" ? -1 : 1) : (a.per ?? Infinity) - (b.per ?? Infinity) || order[a.kind] - order[b.kind]);
+    const paid = ups.filter(u => u.kind === "buy" && u.per != null), recommend = new Set(paid.slice(0, 3));
+    const tempBuys = [
+      ["Booster Cookie", "+10 for 4 days (plus its other perks)", P("BOOSTER_COOKIE"), P("BOOSTER_COOKIE") ? `≈ ${fmt(P("BOOSTER_COOKIE") / 4)} a day` : ""],
+      ["God Potion", "+10 (Magic Find IV) and every other potion, 12 h + Alchemy bonus", P("GOD_POTION_2"), ""],
+      ["Celestial Mason Jar", "+1 for a God Potion's whole duration", P("CELESTIAL_MASON_JAR"), ""],
+      ["Scorched Power Crystal", "Beacon V fuel: +3 instead of +2.5", P("SCORCHED_POWER_CRYSTAL"), ""],
+      ["Extremely Real Shuriken", "+5 on mobs you tag with it (added after everything else)", P("FAKE_SHURIKEN"), "reusable"],
+    ];
+
+    const row = r => `<tr><td>${r[0]}</td><td><b>${Math.round(r[1] * 10) / 10}</b> <span class="muted">/ ${r[2]}</span></td><td>${r[3]}</td><td class="small">${r[4]}</td></tr>`;
+    out.innerHTML = `
+      <div class="grid">
+        ${statCard("✨ Magic Find (estimate)", total, `${Math.round(menu * 10) / 10} from the list below${jerry ? " ×1.1 (Jerry)" : ""}${shur ? " +5 shuriken" : ""}`, pct(total, 500))}
+        ${statCard("📋 Your /stats number", stated || "—", stated ? (Math.abs(stated - total) < 0.5 ? "matches the estimate" : `${stated > total ? "+" : ""}${Math.round((stated - total) * 10) / 10} vs the estimate (things the API doesn't show, like reforges or a held item)`) : "type it in below to compare", null)}
+        ${statCard("🎮 Last rare drop in game", lastDrop ? "+" + lastDrop.mf : "—", lastDrop ? `${esc(lastDrop.name)}, ${new Date(lastDrop.t).toLocaleString()} (includes bonuses for that mob)` : "the game link shows it after your next rare drop", null)}
+        ${statCard("🎯 Cap", 500, "Magic Find counts up to 500; above 100% chance it gives a chance at extra drops", null)}
+      </div>
+      <div class="toolbar"><label>Your Magic Find in /stats <input type="number" class="mfIn" data-k="stats" min="0" max="2000" value="${I.stats}" style="width:80px"></label>
+        <label class="chk"><input type="checkbox" class="mfIn" data-k="shuriken"${I.shuriken ? " checked" : ""}> I tag mobs with an Extremely Real Shuriken</label>
+        <button id="mfUse">Use ${stated || total} for drop chances in the app</button><span class="muted small" id="mfUsed"></span></div>
+      <div class="cols2">
+        <div><h3 class="ph">💰 Cheapest ways to get more</h3>
+          <p class="muted small">Permanent upgrades, free ones first, then by coins per +1 Magic Find at live prices. ⭐ = the best value buys right now.</p>
+          <div class="card"><table data-limit="12"><thead><tr><th>Upgrade</th><th>MF</th><th>Cost</th><th>Per +1</th></tr></thead><tbody>
+          ${ups.map(u => `<tr><td>${recommend.has(u) ? "⭐ " : ""}<b>${u.name}</b>${u.kind === "task" ? ' <span class="pill p-low">needs a task</span>' : ""}<div class="muted small">${u.how}</div></td><td class="good">+${u.gain}</td>
+            <td>${u.kind === "free" ? '<span class="good">free</span>' : u.cost != null ? fmt(u.cost) : '<span class="muted">no price</span>'}</td><td>${u.kind === "free" ? "—" : u.per != null ? fmt(u.per) : "—"}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">Everything here is maxed.</td></tr>'}
+          </tbody></table></div>
+          <h3 class="ph">⏳ Temporary boosts</h3>
+          <div class="card"><table><thead><tr><th>Item</th><th>Gives</th><th>Price</th></tr></thead><tbody>
+          ${tempBuys.map(([n, gv, p, note]) => `<tr><td>${esc(n)}</td><td class="small">${esc(gv)}</td><td>${p ? fmt(p) : "—"}${note ? `<div class="muted small">${esc(note)}</div>` : ""}</td></tr>`).join("")}
+          </tbody></table></div>
+          <p class="muted small">Only against some mobs (not counted above): bestiary family tiers (+3 against that mob each), slayer levels against their boss, and the mob-type "Fortune" attributes (Drowned for Undead, Black Widow for Arthropods, Lava Flame for Magmatic and more; see ${goTab("shards", "Shards")}). Also Sorrow Helmet on ghosts, Griffin and Crown of Avarice for Diana, Shark Tooth accessories and Megalodon for sharks.</p></div>
+        <div><h3 class="ph">📊 Where yours comes from</h3>
+          <div class="card"><table><thead><tr><th>Source</th><th>MF</th><th>From</th><th></th></tr></thead><tbody>${perm.map(row).join("")}
+          <tr><td colspan="4" class="muted small" style="padding-top:10px"><b>Buffs right now</b></td></tr>${temp.map(row).join("")}
+          ${jerry ? `<tr><td>👑 Jerry's Statspocalypse</td><td><b>+10%</b></td><td>${src("game", "election")}</td><td class="small">multiplies everything above</td></tr>` : ""}
+          </tbody></table></div>
+          <p class="muted small">Values from the wiki's Magic Find page after the 0.27.3 rework. Reforges, held pet items and a few rarer sources aren't read from the API; the gap to your /stats number shows how much those add.</p></div>
+      </div>`;
+    limitRows(out);
+    out.querySelectorAll(".mfIn").forEach(el => el.addEventListener("change", () => {
+      const cur = {...I, ...store.get("mfIn", {})}; cur[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value; store.set("mfIn", cur); fillMF(); }));
+    $("#mfUse").addEventListener("click", () => { store.set("dropMF", stated || total); $("#mfUsed").textContent = "Saved: drop chances across the app now use " + (stated || total) + "."; });
+  } catch (e){ console.error(e); const o = $("#mfOut"); if (o) o.innerHTML = `<div class="msg err">Couldn't build the Magic Find view: ${esc(e.message)}</div>`; }
+}
+
 // ---------- drop chances with your Magic Find and Pet Luck ----------
 // Wiki (Magic Find): chance = base × (1 + MF/100), pets: base × (1 + (MF + Pet Luck)/100),
 // before 0.27.3 only for drops whose base chance is below 5%; from 0.27.3 for every drop (MF capped at 500). Taming gives +1 Pet Luck per level.
