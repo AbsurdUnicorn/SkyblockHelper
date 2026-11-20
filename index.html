@@ -6561,11 +6561,72 @@ async function fillMF(){
           </tbody></table></div>
           <p class="muted small">Values from the wiki's Magic Find page after the 0.27.3 rework. Reforges, held pet items and a few rarer sources aren't read from the API; the gap to your /stats number shows how much those add.</p></div>
       </div>`;
-    limitRows(out);
+    out.insertAdjacentHTML("beforeend", `<h3 class="ph">🎲 Drop chances from every mob: without Magic Find and with yours</h3><div id="mfDrops"><div class="muted">Loading every mob's drop table from the wiki…</div></div>`);
+    limitRows(out); fillMobDrops();
     out.querySelectorAll(".mfIn").forEach(el => el.addEventListener("change", () => {
       const cur = {...I, ...store.get("mfIn", {})}; cur[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value; store.set("mfIn", cur); fillMF(); }));
     $("#mfUse").addEventListener("click", () => { store.set("dropMF", stated || total); $("#mfUsed").textContent = "Saved: drop chances across the app now use " + (stated || total) + "."; });
   } catch (e){ console.error(e); const o = $("#mfOut"); if (o) o.innerHTML = `<div class="msg err">Couldn't build the Magic Find view: ${esc(e.message)}</div>`; }
+}
+
+// ---------- every mob's drop table (wiki pages using {{Mob Drops Table}}), base chance vs. with your Magic Find ----------
+const MOBDROPS = {data:null, loading:null};
+const MOB_RAR = {c:"Common", u:"Uncommon", r:"Rare", e:"Epic", l:"Legendary", m:"Mythic"};
+const wikiTxt = s => String(s || "").replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, "$1").replace(/\{\{[^{}|]*\|([^{}|]*)[^{}]*\}\}/g, "$1").replace(/\{\{|\}\}|'''?|<[^>]*>/g, "").trim();
+function loadMobDrops(){
+  if (MOBDROPS.data) return Promise.resolve(MOBDROPS.data);
+  return MOBDROPS.loading ||= (async () => {
+    const c = await idb.get("mobdrops:v2"), ep = dataEpoch();
+    if (c && Date.now() - c.t < 7 * 86400e3 && c.t >= ep) return MOBDROPS.data = c.d;
+    try {
+      const out = []; let cont = "";
+      for (let i = 0; i < 40; i++){
+        const j = await getJSON(WIKI_API + "?action=query&generator=embeddedin&geititle=Template:Mob_Drops_Table&geinamespace=0&geilimit=50&prop=revisions&rvprop=content&rvslots=main&format=json&formatversion=2&origin=*" + cont);
+        for (const p of j.query?.pages || []){
+          const t = p.revisions?.[0]?.slots?.main?.content || "", m = mwMob(t); if (!m?.rows.length) continue;
+          const tb = t.slice(t.indexOf("{{Mob Drops Table")), f = (k, src = t) => wikiTxt((src.match(new RegExp("\\|\\s*" + k + "\\s*=\\s*([^\\n]*)")) || [])[1]);
+          out.push({name:p.title, level:f("level", tb) || f("mob_level"), where:f("spawn_location"), rows:m.rows.map(r => ({item:r.item, cnt:wikiTxt(r.cnt), p:mwChanceStr(r.chance)})).filter(r => r.p > 0)});
+        }
+        if (!j.continue) break;
+        cont = "&" + new URLSearchParams(j.continue).toString();
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      idb.set("mobdrops:v2", {t:Date.now(), d:out});
+      return MOBDROPS.data = out;
+    } catch (e){ MOBDROPS.loading = null; if (c) return MOBDROPS.data = c.d; throw e; }
+  })();
+}
+async function fillMobDrops(){
+  try {
+    const mobs = await loadMobDrops(), box = $("#mfDrops"); if (!box || !CUR) return;
+    const {st} = CUR, {mf, pl} = dropStats(st), m = Math.min(mf, MF_CAP());
+    const rareOnly = store.get("mdRare", true), sort = store.get("mdSort", "mob");
+    let rows = mobs.flatMap(mob => mob.rows.map(r => {
+      const x = String(r.item).match(/^\$([curelm])\$\s*(.+)$/), pet = /\bPet$/.test(x ? x[2] : r.item);
+      const name = (x ? `${wikiTxt(x[2])} (${MOB_RAR[x[1]]})` : wikiTxt(r.item)).replace(/&([^&]+)&/g, "($1)");
+      const boosted = MF_NEW() || r.p < 0.05, yours = boosted ? r.p * (1 + (m + (pet ? pl : 0)) / 100) : r.p;
+      return {mob, name, cnt:r.cnt, p:r.p, yours, pet};
+    }));
+    if (rareOnly) rows = rows.filter(r => r.p <= 0.05);
+    if (sort === "rare") rows.sort((a, b) => a.p - b.p); else if (sort === "gain") rows.sort((a, b) => (1 / b.p - 1 / b.yours) - (1 / a.p - 1 / a.yours));
+    const ch = p => p > 1 ? `${Math.floor(p)}× <span class="muted">+ ${pctTxt(p - Math.floor(p))} chance of ${Math.floor(p) + 1}×</span>` : pctTxt(p);
+    box.innerHTML = `${dropControls(st)}
+      <div class="toolbar"><input data-filter="mdtab" placeholder="Filter by mob or drop… (e.g. Enderman, Scythe Blade)" style="min-width:300px">
+        <label class="chk"><input type="checkbox" id="mdRare"${rareOnly ? " checked" : ""}> Only rare drops (5% or less)</label>
+        <select id="mdSort"><option value="mob"${sort === "mob" ? " selected" : ""}>By mob</option><option value="rare"${sort === "rare" ? " selected" : ""}>Rarest first</option><option value="gain"${sort === "gain" ? " selected" : ""}>Most kills saved by your Magic Find</option></select>
+        <span class="muted small">${fmt(rows.length)} drops from ${fmt(mobs.length)} mobs, using ${mf} Magic Find${pl ? ` and ${pl} Pet Luck for pets` : ""}</span></div>
+      <div class="card"><table id="mdtab" data-limit="40"><thead><tr><th>Mob</th><th>Drop</th><th>Amount</th><th>Base chance</th><th>With your MF</th><th>Kills per drop</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${esc(r.mob.name)}${r.mob.level ? ` <span class="muted small">Lv ${esc(r.mob.level)}</span>` : ""}${r.mob.where ? `<div class="muted small">${esc(r.mob.where)}</div>` : ""}</td>
+        <td>${esc(r.name)}${r.pet && pl ? ' <span class="muted small">(+ Pet Luck)</span>' : ""}</td><td class="small">${esc(r.cnt)}</td>
+        <td class="muted">${ch(r.p)}</td><td class="${r.yours > r.p ? "good" : ""}">${ch(r.yours)}</td>
+        <td class="small">${r.p >= 1 ? "every kill" : `${fmt(Math.round(1 / r.p))} → <b>${r.yours >= 1 ? "every kill" : fmt(Math.round(1 / r.yours))}</b>`}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No drops.</td></tr>'}
+      </tbody></table></div>
+      <p class="muted small">Drop tables from every wiki page with a mob drop table (refreshed weekly). ${MF_NEW() ? "Since 0.27.3 Magic Find boosts every drop, counting up to 500; past 100% it gives a chance at an extra one." : "Magic Find only boosts drops of 5% or less."} Bonuses that only work on some mobs (bestiary, slayer level, mob-type Fortune attributes) aren't added; put your total for that mob in the Magic Find box to see it. Slayer boss drops are in ${goTab("slayers", "Slayers")}.</p>`;
+    limitRows(box);
+    box.querySelector("[data-filter]").addEventListener("input", e => filterTable(e.target));
+    $("#mdRare").addEventListener("change", e => { store.set("mdRare", e.target.checked); fillMobDrops(); });
+    $("#mdSort").addEventListener("change", e => { store.set("mdSort", e.target.value); fillMobDrops(); });
+  } catch (e){ console.error(e); const b = $("#mfDrops"); if (b) b.innerHTML = `<div class="msg err">Couldn't load the mob drop tables: ${esc(e.message)}</div>`; }
 }
 
 // ---------- drop chances with your Magic Find and Pet Luck ----------
