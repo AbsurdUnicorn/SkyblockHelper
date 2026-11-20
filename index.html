@@ -3771,6 +3771,7 @@ function linkOrders(text){
 }
 function linkParse(e){
   const m = String(e.m || "").replace(/\s*\(\d+\)$/, "").replace(/[ \t]+/g, " ").trim(), t = +e.t || 0; let x;
+  if ((x = m.match(/^\[Stats (tab|menu)\] (.+)$/))){ const vals = {}; for (const part of x[2].split(" | ")){ const [k, v] = part.split("="); if (k && isFinite(+v)) vals[k.trim()] = +v; } return {t, k:"stats", src:x[1], vals}; }
   if ((x = m.match(/^You caught (a|an|x?[\d,]+x?) (.+?) Shards?!/))) return {t, k:"catch", n:/\d/.test(x[1]) ? linkNum(x[1].replace(/x/g, "")) : 1, name:x[2]};   // "a Solar Shard", "x2 Solar Shards"
   if ((x = m.match(/^You caught an? (.+?)!$/))) return {t, k:"sea", name:x[1]};
   if (/^It's a Double Hook!/.test(m)) return {t, k:"dhook"};
@@ -6487,7 +6488,7 @@ async function fillMF(){
     const menu = [...perm, ...temp].reduce((a, r) => a + r[1], 0), shur = I.shuriken ? 5 : 0;
     const total = Math.min(500, Math.round((menu * (1 + jerry) + shur) * 10) / 10);
     const lastDrop = (LINK.events || []).filter(e => e.k === "drop" && e.mf != null).pop();
-    const stated = +I.stats || 0;
+    const LS = linkStats(), liveMF = LS?.vals["Magic Find"], stated = +I.stats || liveMF || 0, statedFrom = +I.stats ? "you" : liveMF != null ? "game" : "";
 
     // ---- ways to get more: permanent first; cost per +1 Magic Find ----
     const ups = [];
@@ -6535,10 +6536,11 @@ async function fillMF(){
     out.innerHTML = `
       <div class="grid">
         ${statCard("✨ Magic Find (estimate)", total, `${Math.round(menu * 10) / 10} from the list below${jerry ? " ×1.1 (Jerry)" : ""}${shur ? " +5 shuriken" : ""}`, pct(total, 500))}
-        ${statCard("📋 Your /stats number", stated || "—", stated ? (Math.abs(stated - total) < 0.5 ? "matches the estimate" : `${stated > total ? "+" : ""}${Math.round((stated - total) * 10) / 10} vs the estimate (things the API doesn't show, like reforges or a held item)`) : "type it in below to compare", null)}
-        ${statCard("🎮 Last rare drop in game", lastDrop ? "+" + lastDrop.mf : "—", lastDrop ? `${esc(lastDrop.name)}, ${new Date(lastDrop.t).toLocaleString()} (includes bonuses for that mob)` : "the game link shows it after your next rare drop", null)}
+        ${statCard(statedFrom === "game" ? "🎮 Your Magic Find in game" : "📋 Your /stats number", stated || "—", statedFrom === "game" ? `from the ${LS.src === "tab" ? "tab list" : "stats menu"} ${agoTxt(LS.t)}; ${Math.abs(stated - total) < 0.5 ? "matches the estimate" : `${stated > total ? "+" : ""}${Math.round((stated - total) * 10) / 10} vs the estimate (reforges, pet items and buffs the API doesn't show)`}` : stated ? (Math.abs(stated - total) < 0.5 ? "matches the estimate" : `${stated > total ? "+" : ""}${Math.round((stated - total) * 10) / 10} vs the estimate (things the API doesn't show, like reforges or a held item)`) : "type it in below to compare", null)}
+        ${statCard("🎲 Last rare drop in game", lastDrop ? "+" + lastDrop.mf : "—", lastDrop ? `${esc(lastDrop.name)}, ${new Date(lastDrop.t).toLocaleString()} (includes bonuses for that mob)` : "the game link shows it after your next rare drop", null)}
         ${statCard("🎯 Cap", 500, "Magic Find counts up to 500; above 100% chance it gives a chance at extra drops", null)}
       </div>
+      ${LS ? "" : `<p class="muted small">🎮 With SkyBlock Helper Link 1.0.2 running, your real Magic Find and Pet Luck are read from the game: turn on the Stats widget in your tab list (/tab), or open the SkyBlock Menu or /stats once.</p>`}
       <div class="toolbar"><label>Your Magic Find in /stats <input type="number" class="mfIn" data-k="stats" min="0" max="2000" value="${I.stats}" style="width:80px"></label>
         <label class="chk"><input type="checkbox" class="mfIn" data-k="shuriken"${I.shuriken ? " checked" : ""}> I tag mobs with an Extremely Real Shuriken</label>
         <button id="mfUse">Use ${stated || total} for drop chances in the app</button><span class="muted small" id="mfUsed"></span></div>
@@ -6576,7 +6578,7 @@ const wikiTxt = s => String(s || "").replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, 
 function loadMobDrops(){
   if (MOBDROPS.data) return Promise.resolve(MOBDROPS.data);
   return MOBDROPS.loading ||= (async () => {
-    const c = await idb.get("mobdrops:v2"), ep = dataEpoch();
+    const c = await idb.get("mobdrops:v3"), ep = dataEpoch();
     if (c && Date.now() - c.t < 7 * 86400e3 && c.t >= ep) return MOBDROPS.data = c.d;
     try {
       const out = []; let cont = "";
@@ -6585,13 +6587,13 @@ function loadMobDrops(){
         for (const p of j.query?.pages || []){
           const t = p.revisions?.[0]?.slots?.main?.content || "", m = mwMob(t); if (!m?.rows.length) continue;
           const tb = t.slice(t.indexOf("{{Mob Drops Table")), f = (k, src = t) => wikiTxt((src.match(new RegExp("\\|\\s*" + k + "\\s*=\\s*([^\\n]*)")) || [])[1]);
-          out.push({name:p.title, level:f("level", tb) || f("mob_level"), where:f("spawn_location"), rows:m.rows.map(r => ({item:r.item, cnt:wikiTxt(r.cnt), p:mwChanceStr(r.chance)})).filter(r => r.p > 0)});
+          out.push({name:p.title, level:f("level", tb) || f("mob_level"), where:f("spawn_location"), ids:f("id").toLowerCase().split(/[,\s]+/).filter(Boolean), rows:m.rows.map(r => ({item:r.item, cnt:wikiTxt(r.cnt), p:mwChanceStr(r.chance)})).filter(r => r.p > 0)});
         }
         if (!j.continue) break;
         cont = "&" + new URLSearchParams(j.continue).toString();
       }
       out.sort((a, b) => a.name.localeCompare(b.name));
-      idb.set("mobdrops:v2", {t:Date.now(), d:out});
+      idb.set("mobdrops:v3", {t:Date.now(), d:out});
       return MOBDROPS.data = out;
     } catch (e){ MOBDROPS.loading = null; if (c) return MOBDROPS.data = c.d; throw e; }
   })();
@@ -6600,12 +6602,24 @@ async function fillMobDrops(){
   try {
     const mobs = await loadMobDrops(), box = $("#mfDrops"); if (!box || !CUR) return;
     const {st} = CUR, {mf, pl} = dropStats(st), m = Math.min(mf, MF_CAP());
-    const rareOnly = store.get("mdRare", true), sort = store.get("mdSort", "mob");
+    const rareOnly = store.get("mdRare", true), sort = store.get("mdSort", "mob"), useBest = store.get("mdBest", true);
+    // bestiary: +3 Magic Find per family tier against that mob (0.27.3; critters give Hunting Fortune instead).
+    // A wiki mob is matched to its family by its mob ids (they're the bestiary kill keys), else by a unique name.
+    const hasBest = Object.keys(st.bestiary || {}).length > 0, famByKey = {}, famByName = {};
+    for (const [area, fams] of BESTIARY_ALL) for (const f of fams){ const p = famProgress(st.bestiary || {}, area, f); for (const k of f[3].split(" ")) famByKey[k] = p; (famByName[f[0].toLowerCase()] ||= []).push(p); }
+    const base = k => k.replace(/_(d+|#)$/, ""), famByBase = {};
+    for (const [k, p] of Object.entries(famByKey)){ const bk = base(k); famByBase[bk] = famByBase[bk] && famByBase[bk] !== p ? "x" : p; }
+    const byName = n => { const c = famByName[n.toLowerCase()] || []; return c.length === 1 ? c[0] : null; };
+    const famOf = mob => { for (const id of mob.ids || []) if (famByKey[id]) return famByKey[id];
+      for (const id of mob.ids || []){ const p = famByBase[base(id)]; if (p && p !== "x") return p; }
+      const c = famByName[mob.name.toLowerCase()] || []; if (c.length) return c.length === 1 ? c[0] : c.find(p => mob.where && mob.where.includes(p.area)) || null;
+      return byName(mob.name.replace(/s*(.*)$/, "")); };
+    const famCache = new Map(), bestOf = mob => { if (!famCache.has(mob)){ const f = famOf(mob); famCache.set(mob, {f, mf:f && !f.critter && useBest && hasBest ? 3 * f.tier : 0}); } return famCache.get(mob); };
     let rows = mobs.flatMap(mob => mob.rows.map(r => {
       const x = String(r.item).match(/^\$([curelm])\$\s*(.+)$/), pet = /\bPet$/.test(x ? x[2] : r.item);
       const name = (x ? `${wikiTxt(x[2])} (${MOB_RAR[x[1]]})` : wikiTxt(r.item)).replace(/&([^&]+)&/g, "($1)");
-      const boosted = MF_NEW() || r.p < 0.05, yours = boosted ? r.p * (1 + (m + (pet ? pl : 0)) / 100) : r.p;
-      return {mob, name, cnt:r.cnt, p:r.p, yours, pet};
+      const b = bestOf(mob), boosted = MF_NEW() || r.p < 0.05, yours = boosted ? r.p * (1 + (Math.min(mf + b.mf, MF_CAP()) + (pet ? pl : 0)) / 100) : r.p;
+      return {mob, name, cnt:r.cnt, p:r.p, yours, pet, fam:b.f, bmf:b.mf};
     }));
     if (rareOnly) rows = rows.filter(r => r.p <= 0.05);
     if (sort === "rare") rows.sort((a, b) => a.p - b.p); else if (sort === "gain") rows.sort((a, b) => (1 / b.p - 1 / b.yours) - (1 / a.p - 1 / a.yours));
@@ -6614,28 +6628,39 @@ async function fillMobDrops(){
       <div class="toolbar"><input data-filter="mdtab" placeholder="Filter by mob or drop… (e.g. Enderman, Scythe Blade)" style="min-width:300px">
         <label class="chk"><input type="checkbox" id="mdRare"${rareOnly ? " checked" : ""}> Only rare drops (5% or less)</label>
         <select id="mdSort"><option value="mob"${sort === "mob" ? " selected" : ""}>By mob</option><option value="rare"${sort === "rare" ? " selected" : ""}>Rarest first</option><option value="gain"${sort === "gain" ? " selected" : ""}>Most kills saved by your Magic Find</option></select>
-        <span class="muted small">${fmt(rows.length)} drops from ${fmt(mobs.length)} mobs, using ${mf} Magic Find${pl ? ` and ${pl} Pet Luck for pets` : ""}</span></div>
-      <div class="card"><table id="mdtab" data-limit="40"><thead><tr><th>Mob</th><th>Drop</th><th>Amount</th><th>Base chance</th><th>With your MF</th><th>Kills per drop</th></tr></thead><tbody>
+        <label class="chk"><input type="checkbox" id="mdBest"${useBest ? " checked" : ""}> Add my bestiary Magic Find for each mob</label>
+        <span class="muted small">${fmt(rows.length)} drops from ${fmt(mobs.length)} mobs, using ${mf} Magic Find${useBest && hasBest ? " plus your bestiary bonus per mob" : ""}${pl ? ` and ${pl} Pet Luck for pets` : ""}</span></div>
+      ${useBest && !hasBest ? '<div class="msg">No bestiary kills in your profile data (turn on the Bestiary API setting in-game), so no bestiary Magic Find is added.</div>' : ""}
+      <div class="card"><table id="mdtab" data-limit="40"><thead><tr><th>Mob</th><th>Drop</th><th>Amount</th><th>Base chance</th><th>Bestiary MF</th><th>With your MF</th><th>Kills per drop</th></tr></thead><tbody>
       ${rows.map(r => `<tr><td>${esc(r.mob.name)}${r.mob.level ? ` <span class="muted small">Lv ${esc(r.mob.level)}</span>` : ""}${r.mob.where ? `<div class="muted small">${esc(r.mob.where)}</div>` : ""}</td>
         <td>${esc(r.name)}${r.pet && pl ? ' <span class="muted small">(+ Pet Luck)</span>' : ""}</td><td class="small">${esc(r.cnt)}</td>
-        <td class="muted">${ch(r.p)}</td><td class="${r.yours > r.p ? "good" : ""}">${ch(r.yours)}</td>
-        <td class="small">${r.p >= 1 ? "every kill" : `${fmt(Math.round(1 / r.p))} → <b>${r.yours >= 1 ? "every kill" : fmt(Math.round(1 / r.yours))}</b>`}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No drops.</td></tr>'}
+        <td class="muted">${ch(r.p)}</td><td class="small">${!r.fam ? '<span class="muted">—</span>' : r.fam.critter ? '<span class="muted">critter (Hunting Fortune)</span>' : `${r.bmf ? `<b>+${r.bmf}</b>` : "+0"} <span class="muted">tier ${r.fam.tier}/${r.fam.max}</span>`}</td><td class="${r.yours > r.p ? "good" : ""}">${ch(r.yours)}${r.bmf ? `<div class="muted small">${Math.min(mf + r.bmf, MF_CAP())} MF here</div>` : ""}</td>
+        <td class="small">${r.p >= 1 ? "every kill" : `${fmt(Math.round(1 / r.p))} → <b>${r.yours >= 1 ? "every kill" : fmt(Math.round(1 / r.yours))}</b>`}</td></tr>`).join("") || '<tr><td colspan="7" class="muted">No drops.</td></tr>'}
       </tbody></table></div>
-      <p class="muted small">Drop tables from every wiki page with a mob drop table (refreshed weekly). ${MF_NEW() ? "Since 0.27.3 Magic Find boosts every drop, counting up to 500; past 100% it gives a chance at an extra one." : "Magic Find only boosts drops of 5% or less."} Bonuses that only work on some mobs (bestiary, slayer level, mob-type Fortune attributes) aren't added; put your total for that mob in the Magic Find box to see it. Slayer boss drops are in ${goTab("slayers", "Slayers")}.</p>`;
+      <p class="muted small">Drop tables from every wiki page with a mob drop table (refreshed weekly). ${MF_NEW() ? "Since 0.27.3 Magic Find boosts every drop, counting up to 500; past 100% it gives a chance at an extra one." : "Magic Find only boosts drops of 5% or less."} Bestiary Magic Find (+3 per family tier, from your profile) is added per mob when the box is ticked. Slayer-level and mob-type Fortune attribute bonuses aren't; add them to the Magic Find box for that mob. Slayer boss drops are in ${goTab("slayers", "Slayers")}.</p>`;
     limitRows(box);
     box.querySelector("[data-filter]").addEventListener("input", e => filterTable(e.target));
     $("#mdRare").addEventListener("change", e => { store.set("mdRare", e.target.checked); fillMobDrops(); });
     $("#mdSort").addEventListener("change", e => { store.set("mdSort", e.target.value); fillMobDrops(); });
+    $("#mdBest").addEventListener("change", e => { store.set("mdBest", e.target.checked); fillMobDrops(); });
   } catch (e){ console.error(e); const b = $("#mfDrops"); if (b) b.innerHTML = `<div class="msg err">Couldn't load the mob drop tables: ${esc(e.message)}</div>`; }
 }
 
 // ---------- drop chances with your Magic Find and Pet Luck ----------
 // Wiki (Magic Find): chance = base × (1 + MF/100), pets: base × (1 + (MF + Pet Luck)/100),
 // before 0.27.3 only for drops whose base chance is below 5%; from 0.27.3 for every drop (MF capped at 500). Taming gives +1 Pet Luck per level.
+// the newest stats line the game link wrote (tab list, or the stats menus when you open them), if under a day old
+function linkStats(){
+  const E = LINK.events || [];
+  for (let i = E.length - 1; i >= 0; i--){ const e = E[i]; if (e.k === "stats" && e.vals && (e.vals["Magic Find"] != null || e.vals["Pet Luck"] != null)) return Date.now() - e.t < 86400e3 ? e : null; }
+  return null;
+}
+const agoTxt = t => { const m = Math.round((Date.now() - t) / 60e3); return m < 1 ? "just now" : m < 60 ? m + " min ago" : Math.round(m / 60) + " h ago"; };
 function dropStats(st){
   const taming = st.skills.find(s => s.id === "TAMING")?.level || 0;
   const petMF = (st.pets || []).length ? petData(st).mf : 0;
-  return {mf:+store.get("dropMF", petMF) || 0, pl:+store.get("dropPL", taming) || 0, taming, petMF};
+  const L = store.get("dropLive", true) ? linkStats() : null, liveMF = L?.vals["Magic Find"], livePL = L?.vals["Pet Luck"];
+  return {mf:liveMF != null ? liveMF : +store.get("dropMF", petMF) || 0, pl:livePL != null ? livePL : +store.get("dropPL", taming) || 0, taming, petMF, live:L, liveMF:liveMF != null, livePL:livePL != null};
 }
 function dropChance(st, base, pet, mfOk = true){
   const {mf, pl} = dropStats(st);
@@ -6654,14 +6679,17 @@ function dropLine(st, name, base, opts = {}){
 // the shared Magic Find / Pet Luck inputs (same values everywhere, saved in this browser)
 function dropControls(st){
   const d = dropStats(st);
+  const L = linkStats();
   return `<div class="toolbar dropctl"><label class="chk">✨ Magic Find <input type="number" class="dropMF" min="0" max="2000" value="${d.mf}" style="width:70px"></label>
     <label class="chk">🍀 Pet Luck <input type="number" class="dropPL" min="0" max="500" value="${d.pl}" style="width:70px"></label>
+    ${L ? `<label class="chk"><input type="checkbox" class="dropLive"${d.live ? " checked" : ""}> 🎮 Use my live stats from the game (${L.src === "tab" ? "tab list" : "stats menu"}, ${agoTxt(L.t)}${L.vals["Magic Find"] != null ? `: ${L.vals["Magic Find"]} MF` : ""}${L.vals["Pet Luck"] != null ? `, ${L.vals["Pet Luck"]} Pet Luck` : ""})</label>` : ""}
     <span class="muted small">Your total from the stats menu. Defaults: Pet Luck = Taming level (${d.taming}), Magic Find = Pet Score bonus (+${d.petMF}). Formula from the wiki: base × (1 + MF/100), pets also add Pet Luck; ${MF_NEW() ? "since 0.27.3 every drop is boosted (Magic Find counts up to 500)" : "only drops under 5% are boosted"}.</span></div>`;
 }
 document.addEventListener("change", e => {
   const t = e.target;
-  if (t.classList?.contains("dropMF")) { store.set("dropMF", Math.max(0, +t.value || 0)); render(); }
-  else if (t.classList?.contains("dropPL")) { store.set("dropPL", Math.max(0, +t.value || 0)); render(); }
+  if (t.classList?.contains("dropMF")) { store.set("dropMF", Math.max(0, +t.value || 0)); store.set("dropLive", false); render(); }
+  else if (t.classList?.contains("dropPL")) { store.set("dropPL", Math.max(0, +t.value || 0)); store.set("dropLive", false); render(); }
+  else if (t.classList?.contains("dropLive")) { store.set("dropLive", t.checked); render(); }
 });
 // Rare drops from the wiki drop tables: mob name → [[drop, base chance, is a pet]]
 const RARE_DROPS = {

@@ -5,6 +5,8 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
@@ -26,7 +28,9 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
@@ -42,6 +46,8 @@ import java.util.regex.Pattern;
  *   - skill XP gains shown in the action bar
  *   - your area and purse from the sidebar
  *   - your Bazaar orders while you have the "Bazaar Orders" menu open yourself
+ *   - your own stats (Magic Find, Pet Luck, Strength…) from the Stats lines of the tab list, and from the stats
+ *     items of the SkyBlock Menu and /stats when you open those menus yourself
  *
  * What it never does, by design (Hypixel forbids automation and changing how the client talks to the server):
  * it sends nothing to any server and uses no network at all, never types chat or commands, never clicks, opens or
@@ -66,6 +72,8 @@ public class SbhLinkClient implements ClientModInitializer {
 		+ "|KUUDRA DOWN!)");
 	// skill XP in the action bar: "+12.5 Combat (45.2%)" or "+12.5 Combat (1,234/5,000)"
 	private static final Pattern SKILL = Pattern.compile("\\+([\\d,.]+) (Farming|Mining|Combat|Foraging|Fishing|Enchanting|Alchemy|Taming|Carpentry|Runecrafting|Social|Hunting) \\(([^)]*)\\)");
+	// a stat line: "✯ Magic Find: 120" (tab list) or "✯ Magic Find 120" (stats menus). Longer names first.
+	private static final Pattern STAT = Pattern.compile("^[^A-Za-z]*(Health|Defense|Strength|Intelligence|Crit Chance|Crit Damage|Bonus Attack Speed|Attack Speed|Ferocity|Magic Find|Pet Luck|True Defense|Sea Creature Chance|Fishing Speed|Treasure Chance|Mining Speed|Mining Fortune|Farming Fortune|Foraging Fortune|Hunting Fortune|Combat Wisdom|Speed)\\s*:?\\s*\\+?([\\d,.]+)");
 	private static final long MAX_BYTES = 5L * 1024 * 1024;   // then the file is rotated to events.1.jsonl
 
 	private final ExecutorService writer = Executors.newSingleThreadExecutor(r -> {
@@ -74,8 +82,8 @@ public class SbhLinkClient implements ClientModInitializer {
 		return t;
 	});
 	private Path file;
-	private String lastSkill = "", lastArea = "", lastPurse = "", lastOrders = "";
-	private long lastPurseAt = 0;
+	private String lastSkill = "", lastArea = "", lastPurse = "", lastOrders = "", lastTabStats = "", lastMenuStats = "";
+	private long lastPurseAt = 0, lastTabStatsAt = 0;
 	private int ticks = 0;
 
 	@Override
@@ -128,6 +136,54 @@ public class SbhLinkClient implements ClientModInitializer {
 		if (++ticks % 20 != 0 || mc.level == null || !onHypixel()) return;
 		try { sidebar(mc); } catch (RuntimeException ignored) { }
 		try { ordersMenu(mc); } catch (RuntimeException ignored) { }
+		try { tabStats(mc); } catch (RuntimeException ignored) { }
+		try { statsMenu(mc); } catch (RuntimeException ignored) { }
+	}
+
+	// stats from the tab list: only lines that are a stat and a number are kept (no player names)
+	private void tabStats(Minecraft mc) {
+		ClientPacketListener conn = mc.getConnection();
+		if (conn == null) return;
+		Map<String, String> found = new LinkedHashMap<>();
+		for (PlayerInfo p : conn.getListedOnlinePlayers()) {
+			Component name = p.getTabListDisplayName();
+			if (name != null) statLine(name.getString(), found);
+		}
+		String all = statText(found);
+		long now = System.currentTimeMillis();
+		if (all.isEmpty() || all.equals(lastTabStats) || now - lastTabStatsAt < 30_000) return;
+		lastTabStats = all; lastTabStatsAt = now;
+		write("[Stats tab] " + all);
+	}
+
+	// stats from "Your SkyBlock Profile" in the SkyBlock Menu and the "… Stats" items of /stats, while you have them open
+	private void statsMenu(Minecraft mc) {
+		if (!(mc.gui.screen() instanceof AbstractContainerScreen<?> screen)) { lastMenuStats = ""; return; }
+		Map<String, String> found = new LinkedHashMap<>();
+		for (Slot slot : screen.getMenu().slots) {
+			if (slot.container instanceof Inventory) continue;
+			ItemStack stack = slot.getItem();
+			if (stack.isEmpty()) continue;
+			String name = stack.getHoverName().getString().replaceAll("§.", "").strip();
+			if (!name.equals("Your SkyBlock Profile") && !name.endsWith(" Stats")) continue;   // not gear, whose lore lists its own bonuses
+			ItemLore lore = stack.get(DataComponents.LORE);
+			if (lore != null) for (Component c : lore.lines()) statLine(c.getString(), found);
+		}
+		String all = statText(found);
+		if (all.isEmpty() || all.equals(lastMenuStats)) return;
+		lastMenuStats = all;
+		write("[Stats menu] " + all);
+	}
+
+	private static void statLine(String text, Map<String, String> into) {
+		Matcher m = STAT.matcher(text.replaceAll("§.", "").strip());
+		if (m.find()) into.putIfAbsent(m.group(1), m.group(2).replaceAll(",", ""));
+	}
+
+	private static String statText(Map<String, String> found) {
+		List<String> parts = new ArrayList<>();
+		for (Map.Entry<String, String> e : found.entrySet()) parts.add(e.getKey() + "=" + e.getValue());
+		return String.join(" | ", parts);
 	}
 
 	private void sidebar(Minecraft mc) {
