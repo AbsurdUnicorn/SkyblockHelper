@@ -35,6 +35,24 @@ nav button{background:none;color:var(--muted);border:none;font-weight:500;text-a
 nav button:hover{background:var(--panel2);color:var(--text)}
 nav button.on{background:var(--panel2);color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
 @media (max-width:860px){main{display:block}nav#tabs{position:static;flex-direction:row;overflow-x:auto;max-height:none;margin-bottom:14px;gap:6px}.tgroup{flex-direction:row}.tglabel{display:none}nav button{width:auto}}
+nav button.tglabel{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:2px 10px 4px;font-weight:600;display:flex;justify-content:space-between;align-items:center;border-radius:5px}
+nav button.tglabel:hover{background:none;color:var(--text)}
+.tgcar{font-size:10px;opacity:.5;transition:transform .15s}nav button.tglabel:hover .tgcar{opacity:1}
+.tgroup.shut .tgcar{transform:rotate(-90deg)}.tgroup.shut button[data-tab]:not(.on){display:none}
+.tfind{position:sticky;top:0;z-index:2;background:var(--bg);padding-bottom:4px}
+#tgroups{display:flex;flex-direction:column;gap:14px}
+.tfind input{width:100%;max-width:100%;box-sizing:border-box;font-size:13px;padding:7px 10px}
+#tfRes{display:flex;flex-direction:column;gap:1px;margin-top:6px}
+#tfRes button{white-space:normal;font-size:13px}#tfRes button.sel{background:var(--panel2);color:var(--text)}
+.related{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 14px}
+.related .rlabel{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-right:2px}
+.related .navback{padding:4px 12px;font-size:12px;border-radius:999px;margin-right:8px;border-color:var(--accent);color:var(--accent)}
+.rchip{font-size:12px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;color:var(--text);text-decoration:none;background:var(--panel);transition:border-color .15s,color .15s}
+.rchip:hover{border-color:var(--accent);color:var(--accent)}
+a.golink{white-space:nowrap}
+@keyframes flashIt{0%,40%{box-shadow:0 0 0 3px var(--accent);background-color:rgba(245,184,61,.14)}100%{box-shadow:0 0 0 3px transparent}}
+.flash{animation:flashIt 2.2s ease-out;border-radius:6px}
+@media (max-width:860px){#tgroups{flex-direction:row;gap:6px}.tfind,nav button.tglabel{display:none}.tgroup.shut button[data-tab]{display:inline-block!important}}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
 .card h3{margin:0 0 8px;font-size:14px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
@@ -382,7 +400,8 @@ const FAMILY_OVERRIDES = [
 // ---------- helpers ----------
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const fmt = n => n == null ? "—" : Math.abs(n) >= 1e9 ? (n/1e9).toFixed(2)+"B" : (Math.abs(n) >= 1e6 ? (n/1e6).toFixed(n>=1e7?1:2)+"M" : Math.abs(n) >= 1e4 ? (n/1e3).toFixed(1)+"k" : Math.round(n).toLocaleString());
+const NUM_FMT = new Intl.NumberFormat();   // made once: toLocaleString builds a new formatter on every call
+const fmt = n => n == null ? "—" : Math.abs(n) >= 1e9 ? (n/1e9).toFixed(2)+"B" : (Math.abs(n) >= 1e6 ? (n/1e6).toFixed(n>=1e7?1:2)+"M" : Math.abs(n) >= 1e4 ? (n/1e3).toFixed(1)+"k" : NUM_FMT.format(Math.round(n)));
 const pct = (a,b) => b ? Math.round(a/b*1000)/10 : 0;
 const bar = p => `<div class="bar${p >= 100 ? " full" : ""}"><i style="width:${Math.max(0,Math.min(100,p))}%"></i></div>`;
 // icons picked from a title's words, so every card and sub-tab gets one without listing them all by hand
@@ -440,10 +459,11 @@ const dataEpoch = () => +store.get("dataEpoch", 0);
 function noteGameVersion(v){
   if (!v) return;
   const old = store.get("sbVersion", "");
-  if (old !== v){ store.set("sbVersion", v); store.set("dataEpoch", Date.now()); }   // first run of this check too: copies saved before it may predate the update
+  if (old !== v){ store.set("sbVersion", v); SB_VERSION = v; store.set("dataEpoch", Date.now()); }   // first run of this check too: copies saved before it may predate the update
 }
 const verGte = (a, b) => { const x = String(a || "0").split(".").map(Number), y = String(b).split(".").map(Number); for (let i = 0; i < Math.max(x.length, y.length); i++){ if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return true; };
-const sbVersion = () => store.get("sbVersion", "");
+let SB_VERSION = store.get("sbVersion", "");   // read once; it was read from storage on every drop chance
+const sbVersion = () => SB_VERSION;
 async function cachedJSON(url, maxAge){
   const c = await idb.get("url:" + url), ep = dataEpoch();
   if (ep && Date.now() - ep < 3 * 86400e3 && /wiki/.test(url)) maxAge = Math.min(maxAge, 6 * 3600e3);
@@ -1339,7 +1359,7 @@ document.addEventListener("click", e => {
     const keys = new Set(items.map(i => i.key));
     document.querySelectorAll("[data-plan]").forEach(x => { if (keys.has(x.dataset.plan)){ x.textContent = "✓ In plan"; x.classList.replace("add", "inplan"); } });
   }
-  if (e.target.id === "autoAddAll" && AUTO){ addToPlan(AUTO.picked); tab = "plan"; store.set("tab", tab); render(); }
+  if (e.target.id === "autoAddAll" && AUTO){ addToPlan(AUTO.picked); goTo("plan"); }
 });
 document.addEventListener("change", e => {
   const k = e.target.dataset?.af; if (!k) return;
@@ -1651,12 +1671,15 @@ function shardAnalysis(st, S){
 // Fusions you can do right now with the loose shards you have
 function fusableNow(S, an){
   const out = [];
-  const have = id => an.byId[id]?.loose || 0;
+  // only the shards you have loose; most recipes need one you don't, so they're skipped before any other work
+  const L = {}; for (const r of an.rows) if (r.loose > 0) L[r.s.id] = r.loose;
   for (const r of an.rows){
     let best = null, options = 0;
     for (const [qty, pairs] of Object.entries(S.rec[r.s.id] || {})) for (const [a, b] of pairs){
+      const ha = L[a]; if (!ha) continue;
+      const hb = L[b]; if (!hb) continue;
       const fa = S.by[a]?.fuse || 5, fb = S.by[b]?.fuse || 5;
-      const n = a === b ? Math.floor(have(a) / (fa + fb)) : Math.min(Math.floor(have(a) / fa), Math.floor(have(b) / fb));
+      const n = a === b ? Math.floor(ha / (fa + fb)) : Math.min(Math.floor(ha / fa), Math.floor(hb / fb));
       if (n < 1) continue;
       options++;
       const pa = an.byId[a].price || 0, pb = an.byId[b].price || 0;
@@ -1679,18 +1702,36 @@ function fusableNow(S, an){
 // new attributes first, then the most levels per coin (a million coins counts like one level), then the cheapest
 // (levels counted net of what your own attributes lose by using up their shards)
 const goalBetter = (x, y) => { const ex = x.net / (1 + x.cost / 1e6), ey = y.net / (1 + y.cost / 1e6); return x.unlock !== y.unlock ? x.unlock : ex !== ey ? ex > ey : x.cost < y.cost; };
+// the result only depends on the shard analysis (your shards and the prices it was made with) and the checkbox,
+// so it's kept until either changes instead of being worked out on every redraw
+let GOAL_CACHE = null;
 function goalFusions(S, an, useAll){
+  // the analysis is rebuilt on every redraw, so compare what's in it: each shard's counts and price
+  const key = useAll + "|" + an.rows.map(r => `${r.s.id}:${r.loose}:${r.count}:${r.toMax}:${r.price || 0}`).join(",");
+  if (GOAL_CACHE && GOAL_CACHE.S === S && GOAL_CACHE.key === key){
+    const byId = an.byId;   // same numbers: hand back the steps, pointing at this analysis' rows
+    return GOAL_CACHE.steps.map(x => ({...x, t:byId[x.t.s.id]}));
+  }
+  const steps = goalFusionsCalc(S, an, useAll);
+  GOAL_CACHE = {S, key, steps};
+  return steps;
+}
+function goalFusionsCalc(S, an, useAll){
   const left = {}, extra = {}, bought = {}, usedAll = {};
   for (const r of an.rows) left[r.s.id] = useAll || r.s.noSyph || r.level >= 10 ? r.loose : Math.max(0, r.loose - r.toMax);
   const lvl = (t, n) => t.s.cum.filter(c => t.count + n >= c).length;   // level once n shards are syphoned
   const targets = an.rows.filter(t => !t.s.noSyph && t.level < 10);
   const recipes = new Map(targets.map(t => [t.s.id, Object.entries(S.rec[t.s.id] || {}).flatMap(([q, pairs]) => pairs.filter(([a, b]) => a !== t.s.id && b !== t.s.id && an.byId[a] && an.byId[b]).map(([a, b]) => ({a, b, q:+q, fa:S.by[a].fuse || 5, fb:S.by[b].fuse || 5})))]));
   const steps = [];
-  for (let guard = 0; guard < 80; guard++){
+  // each target's best step is kept and only worked out again when a shard it depends on changes
+  // (its own count, or the inputs of its recipes), which gives the same result as checking everything every round
+  const deps = new Map(), cache = new Map();
+  for (const t of targets) for (const id of [t.s.id, ...recipes.get(t.s.id).flatMap(R => [R.a, R.b])]){ if (!deps.has(id)) deps.set(id, new Set()); deps.get(id).add(t); }
+  const bestFor = t => {
     let best = null;
-    for (const t of targets){
-      const have = t.loose + (extra[t.s.id] || 0), want = Math.max(0, t.toMax - have); if (!want) continue;
-      const from = lvl(t, have);
+    const have = t.loose + (extra[t.s.id] || 0), want = Math.max(0, t.toMax - have); if (!want) return null;
+    const from = lvl(t, have);
+    {
       for (const R of recipes.get(t.s.id)){
         const opts = [];
         if (R.a === R.b) opts.push({runs:Math.floor(left[R.a] / (R.fa + R.fb)), buy:null});
@@ -1717,8 +1758,18 @@ function goalFusions(S, an, useAll){
         }
       }
     }
+    return best;
+  };
+  for (let guard = 0; guard < 80; guard++){
+    let best = null;
+    for (const t of targets){
+      if (!cache.has(t)) cache.set(t, bestFor(t));
+      const b = cache.get(t);
+      if (b && (!best || goalBetter(b, best))) best = b;
+    }
     if (!best) break;
     const {R} = best;
+    for (const id of new Set([R.a, R.b, best.t.s.id])) for (const t of deps.get(id) || []) cache.delete(t);
     if (R.a === R.b) left[R.a] -= best.runs * (R.fa + R.fb);
     else { if (best.buy !== R.a) left[R.a] -= best.runs * R.fa; if (best.buy !== R.b) left[R.b] -= best.runs * R.fb; }
     extra[best.t.s.id] = (extra[best.t.s.id] || 0) + best.made;
@@ -1870,7 +1921,7 @@ async function fillShards(){
   const out = $("#shardOut"); if (!out) return;
   try {
     const [S] = await Promise.all([loadShards(), loadPrices().catch(() => null)]);
-    if (!$("#shardOut")) return;
+    if ($("#shardOut") !== out) return;   // the page was redrawn meanwhile (another tab, or a newer fill)
     const {st} = CUR, an = shardAnalysis(st, S), rows = an.rows;
     SHARDS.an = an;
     const unlocked = rows.filter(r => r.level > 0), maxed = rows.filter(r => r.level >= 10);
@@ -3334,12 +3385,13 @@ function chainNeeds(S, C, id, amount, acc = {buy:{}, fusions:0}){
   else { chainNeeds(S, C.prev || C, h.a, n * fa, acc); chainNeeds(S, C.prev || C, h.b, n * fb, acc); }
   return acc;
 }
-let MONEY_CACHE = null;
+// a few recent results are kept: the money pane asks for several option sets in a row, and a single slot evicted each in turn
+const MONEY_CACHE = new Map();
 function moneyResults(S, bz, o){
   const ck = [bz.t, o.buy, o.sell, o.minVol, o.tax, o.cap, o.sort, o.depth].join("|");
-  if (MONEY_CACHE?.ck === ck) return MONEY_CACHE.res;
+  const hit = MONEY_CACHE.get(ck); if (hit && hit.S === S) return hit.res;
   const res = moneyResultsCalc(S, bz, o);
-  MONEY_CACHE = {ck, res};
+  MONEY_CACHE.set(ck, {S, res}); if (MONEY_CACHE.size > 8) MONEY_CACHE.delete(MONEY_CACHE.keys().next().value);
   return res;
 }
 function moneyResultsCalc(S, bz, o){
@@ -3395,10 +3447,11 @@ function chainTreeHTML(S, C, bz, o, id, amount, depth = 0){
 // values we find each shard's cheapest source (coins + value × hours), then score every final fusion by its real
 // coins per hour and keep the best per result. Farming several shards means splitting your time between them.
 const FARM_LAMBDAS = [1e5, 3e5, 7e5, 1.5e6, 3e6, 5e6, 8e6, 1.2e7, 2e7, 3.5e7, 6e7, 1e8];
-let FARM_CACHE = null;
+// several option sets are in use at once (the money pane, Mining, Foraging): a few results are kept
+const FARM_CACHE = new Map();
 function farmPlans(S, bz, o){
   const ck = [bz.t, o.buy, o.sell, o.minVol, o.tax, o.speed, o.hours, o.minRate, o.depth, o.myRates ? "my" + LINK.ver : ""].join("|");
-  if (FARM_CACHE?.ck === ck && FARM_CACHE.S === S) return FARM_CACHE.res;   // new shard data (S) needs its own flat copy
+  const fhit = FARM_CACHE.get(ck); if (fhit && fhit.S === S) return fhit.res;   // new shard data (S) needs its own flat copy
   const tax = 1 - (+o.tax || 0) / 100, share = 0.25, hours = Math.max(0.5, +o.hours || 2), speed = (+o.speed || 50) / 100;
   const depth = Math.max(1, Math.min(4, +o.depth || 3));
   const px = id => bz.m[S.by[id]?.bz];
@@ -3488,7 +3541,7 @@ function farmPlans(S, bz, o){
     if (cph > 0) res.push({raw:cph, cph, sellRaw:id, need:{farm:{[id]:1}, buy:{}, fusions:0}, areas:[(S.by[id].where.find(w => w.place && !/Fusion|Shop/.test(w.method)) || {}).place || "?"]});
   }
   res.sort((x, y) => y.cph - x.cph);
-  FARM_CACHE = {ck, S, res};
+  FARM_CACHE.set(ck, {S, res}); if (FARM_CACHE.size > 8) FARM_CACHE.delete(FARM_CACHE.keys().next().value);
   return res;
 }
 
@@ -3585,7 +3638,16 @@ function shardRecipes(S, bz, id, k){
   }
   return out.sort((x, y) => x.unit - y.unit).slice(0, k);
 }
+// the same plan is asked for on every redraw of the money pane: kept per Bazaar snapshot
+const SPLIT_CACHE = new Map();
 function splitBuy(S, bz, p, maxOut, budget){
+  const ck = [bz.t, p.out, p.sell, maxOut, budget].join("|"), hit = SPLIT_CACHE.get(ck);
+  if (hit && hit.S === S && hit.bz === bz) return hit.res;
+  const res = splitBuyCalc(S, bz, p, maxOut, budget);
+  SPLIT_CACHE.set(ck, {S, bz, res}); if (SPLIT_CACHE.size > 120) SPLIT_CACHE.delete(SPLIT_CACHE.keys().next().value);
+  return res;
+}
+function splitBuyCalc(S, bz, p, maxOut, budget){
   const tax = 1 - 0.0125, top = shardRecipes(S, bz, p.out, 10);
   if (!top.length || !(maxOut >= 1)) return null;
   const used = {}, spare = {}, subs = {}, cap = id => { const m = bz.m[S.by[id].bz]; return Math.min((m.askVol || 0) / 7 * 0.25, askDepth(m)); };
@@ -3913,6 +3975,16 @@ function linkCheckAlerts(fresh){
     LINK.cheap[id] = o.cheapest;
   }
 }
+// the shard money pane is heavy to work out: game events only redraw it while it's on screen (every 30 s at most)
+let MONEY_LINK_AT = 0, MONEY_STALE = false, MONEYTAB_AT = 0, MONEYTAB_STALE = false;
+const moneyOnScreen = () => { const p = document.querySelector('.pane[data-pane="money"]'); return !!(p && !p.hidden && !document.hidden && $("#moneyOut")); };
+function moneyFromLink(){
+  if (!moneyOnScreen()){ MONEY_STALE = true; return; }
+  if (Date.now() - MONEY_LINK_AT < 30e3){ MONEY_STALE = true; return; }
+  MONEY_LINK_AT = Date.now(); MONEY_STALE = false; MONEY_REDRAW?.();
+}
+setInterval(() => { if (MONEY_STALE && moneyOnScreen() && Date.now() - MONEY_LINK_AT >= 30e3) moneyFromLink(); }, 5000);
+document.addEventListener("click", e => { if (MONEY_STALE && e.target.closest('.subtabs [data-pane="money"]')) setTimeout(() => { MONEY_LINK_AT = 0; moneyFromLink(); }, 0); });
 async function linkPoll(){
   if (!window.sbLink) return;
   const fresh = [];
@@ -3931,7 +4003,10 @@ async function linkPoll(){
     } catch {}
   }
   LINK.started = true;
-  if (fresh.length){ LINK.events.sort((a, b) => a.t - b.t); linkApply(); MONEY_REDRAW?.(); if (tab === "money" && !document.querySelector("#modal.on")) render(); }
+  if (fresh.length){ LINK.events.sort((a, b) => a.t - b.t); linkApply(); moneyFromLink(); MONEYTAB_STALE = true; }
+  // the Money tab picks up new game events every 30 s at most, and not while you're typing in it or a popup is open
+  if (MONEYTAB_STALE && tab === "money" && !document.hidden && Date.now() - MONEYTAB_AT >= 30e3 && !document.querySelector("#modal.on") && !document.querySelector("#view input:focus, #view select:focus")){
+    MONEYTAB_STALE = false; MONEYTAB_AT = Date.now(); render(); }
   // keep Bazaar prices fresh while you have sell offers out, so an undercut can be noticed
   if (Object.keys(LINK.open).length && SHARDS && (!BZFULL || Date.now() - BZFULL.t > 110e3)) { try { await loadBazaarFull(false); } catch {} }
   linkCheckAlerts(fresh);
@@ -4202,8 +4277,8 @@ function spreadHTML(S, bz, sp, budget, u){
     ${(() => { const items = sp.picks.map(({p, mode, B}) => shopItem(p, mode, B)), key = "plan|" + sp.picks.map(x => x.p.out + x.mode + x.B.runs).join(",");
       return `<details data-k="shoplist" style="margin-top:8px"><summary><b>🧾 Full shopping list</b> <span class="muted small">(everything above in one list)</span></summary>${shopListHTML(S, items, "plan")}</details><div style="margin-top:6px">${pinButton(key, `Budget plan: ${sp.picks.length} shard${sp.picks.length === 1 ? "" : "s"} for ${fmt(sp.spent)}`, items)} <span class="muted small">pins the whole plan as a frozen checklist</span></div>`; })()}</div>`;
 }
-function moneyHTML2(S, bz, u){
-  const f0 = moneyFindings(S, bz, u), age = Math.round((Date.now() - bz.t) / 1000), sortBy = u.sort || "mix";
+function moneyHTML2(S, bz, u, F){
+  const f0 = F || moneyFindings(S, bz, u), age = Math.round((Date.now() - bz.t) / 1000), sortBy = u.sort || "mix";
   // worth / borderline stay split by coins per hour; within each, the chosen sort (the mix is scored across both)
   const ranked = sortPlans([...f0.worth, ...f0.border], bz, S, sortBy), inWorth = new Set(f0.worth);
   const f = {...f0, worth:ranked.filter(p => inWorth.has(p)), border:ranked.filter(p => !inWorth.has(p)), passive:sortPlans(f0.passive, bz, S, sortBy)};
@@ -4293,11 +4368,12 @@ function initMoney(S, an){
       const u = read(); store.set("moneyUI", u);
       const el = $("#moneyOut");
       const wide = new Set([...el.querySelectorAll("table[id].all")].map(t => t.id)), y = window.scrollY;
-      el.innerHTML = moneyHTML2(S, bz, u);
+      const F = moneyFindings(S, bz, u);
+      el.innerHTML = moneyHTML2(S, bz, u, F);
       el.querySelectorAll("details").forEach(d => { if (MONEY_OPEN.has(moneyKey(d))) d.open = true; });
       if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y);   // stay where you were reading
       wide.forEach(id => el.querySelector("#" + id)?.classList.add("all"));
-      loadShardHist(S, moneyFindings(S, bz, u).histIds, () => { if ($("#moneyOut")) draw(false); });
+      loadShardHist(S, F.histIds, () => { if ($("#moneyOut")) draw(false); });
       limitRows(el);
       $("#borderBox")?.addEventListener("toggle", () => store.set("moneyUI", read()));
     } catch(e){ console.error(e); outEl.innerHTML = `<div class="msg err">Couldn't load Bazaar prices: ${esc(e.message)}</div>`; }
@@ -4582,7 +4658,7 @@ async function fillForaging(){
     // ---- money pane ----
     const tax = 0.9875;
     const itemRows = FORAGE_ITEMS.map(([id, note, per]) => { const p = bz.m[id]; return p ? {id, note, per, bid:p.bid, ask:p.ask, vol:p.bidVol} : null; }).filter(Boolean);
-    const forShard = s => s.where.some(w => /Moonglade|Torrhus|Tree Gift|Fig|Mangrove|Helix|Galatea|Tranquility|Wyrmgrove|Stride|Honeycomb/.test(w.place + " " + w.method));
+    const forSet = new Set(S.list.filter(s => s.where.some(w => /Moonglade|Torrhus|Tree Gift|Fig|Mangrove|Helix|Galatea|Tranquility|Wyrmgrove|Stride|Honeycomb/.test(w.place + " " + w.method))).map(s => s.id)), forShard = s => forSet.has(s?.id);   // once per shard, not once per plan
     const shardDrops = S.list.filter(forShard).map(s => ({s, p:bz.m[s.bz], w:s.where.find(w => w.place)})).filter(x => x.p?.bid > 20000).sort((a, b) => b.p.bid - a.p.bid).slice(0, 8);
     const plans = farmPlans(S, bz, {...MONEY_DEF, buy:"instant", sell:"offer", minVol:10000, depth:3, speed:50, hours:2})
       .filter(p => Object.keys(p.need.farm).every(id => forShard(S.by[id])) && !(p.spread > 3) && !p.sellRaw).slice(0, 4);
@@ -4830,7 +4906,16 @@ function petLevel(p){
 // lowest BIN for a pet at a rarity (price list keys look like PET-SCATHA-EPIC); falls back to NEU-style SCATHA;3
 const petPrice = (type, ri) => PRICES?.bin?.[`PET-${type}-${PET_TIERS[ri]}`] || PRICES?.bin?.[`${type};${ri}`] || null;
 const petName = t => prettyKey(t).replace(/^Mooshroom Cow$/, "Mooshroom Cow");
+// kept per profile and price list: drop chances ask for it once per line
+const PET_DATA = new WeakMap();
 function petData(st){
+  const c = PET_DATA.get(st);
+  if (c && c.prices === PRICES && c.n === (st.pets || []).length) return c.res;
+  const res = petDataCalc(st);
+  PET_DATA.set(st, {prices:PRICES, n:(st.pets || []).length, res});
+  return res;
+}
+function petDataCalc(st){
   const pets = (st.pets || []).map(p => ({...p, ...petLevel(p)}));
   const best = {};
   for (const p of pets){
@@ -4998,7 +5083,7 @@ async function fillMining(){
     // ---- money pane ----
     const tax = 0.9875;
     const itemRows = MINING_ITEMS.map(([id, note, per]) => { const p = bz.m[id]; return p ? {id, note, per, bid:p.bid, ask:p.ask, vol:p.bidVol} : null; }).filter(Boolean);
-    const minShard = s => s.where.some(w => MINING_AREA.test(w.place + " " + w.method));
+    const minSet = new Set(S.list.filter(s => s.where.some(w => MINING_AREA.test(w.place + " " + w.method))).map(s => s.id)), minShard = s => minSet.has(s?.id);   // worked out once per shard, not once per plan
     const shardDrops = S.list.filter(minShard).map(s => ({s, p:bz.m[s.bz], w:s.where.find(w => w.place && MINING_AREA.test(w.place)) || s.where.find(w => w.place)})).filter(x => x.p?.bid > 20000).sort((a, b) => b.p.bid - a.p.bid).slice(0, 10);
     const plans = farmPlans(S, bz, {...MONEY_DEF, buy:"instant", sell:"offer", minVol:10000, depth:3, speed:50, hours:2})
       .filter(p => Object.keys(p.need.farm).every(id => minShard(S.by[id])) && !(p.spread > 3) && !p.sellRaw).slice(0, 5);
@@ -6017,20 +6102,160 @@ function saveHistory(key, snap){
 
 // ---------- rendering ----------
 let CUR = null; // {st, A, hist}
-const TAB_GROUPS = [["Overview", [["focus","🎯 Focus"],["map","🗺 Map"],["calendar","📅 Calendar"],["history","📈 History"]]],
-  ["Progress", [["sblevel","⭐ SkyBlock Level"],["skills","📊 Skills"],["coll","📦 Collections"],["bestiary","👾 Bestiary"],["pets","🐾 Pets"],["museum","🏛 Museum"],["acc","💍 Accessories"],["minions","🤖 Minions"],["upgrades","⬆ Upgrades"],["shards","🔮 Shards"]]],
-  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"],["mf","✨ Magic Find"]]], ["Islands", [["garden","🌾 Farming & Garden"],["fishing","🎣 Fishing"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["crimson","🔥 Crimson Isle"],["rift","🌀 Rift"]]],
-  ["Money", [["money","💰 Money"],["plan","🛒 Plan"],["auto","🤖 Auto bulk plan"]]]];
+const TAB_GROUPS = [["Home", [["focus","🎯 Focus"],["history","📈 History"],["calendar","📅 Calendar"]]],
+  ["Profile", [["sblevel","⭐ SkyBlock Level"],["skills","📊 Skills"],["coll","📦 Collections"],["museum","🏛 Museum"],["minions","🤖 Minions"],["upgrades","⬆ Upgrades"]]],
+  ["Gear & Stats", [["acc","💍 Accessories"],["pets","🐾 Pets"],["shards","🔮 Shards & Attributes"],["mf","✨ Magic Find"]]],
+  ["Combat", [["slayers","🗡 Slayers"],["combat","💀 Dungeons & Kuudra"],["bestiary","👾 Bestiary"]]],
+  ["Skilling", [["garden","🌾 Farming & Garden"],["mining","⛏ Mining & HotM"],["foraging","🪓 Foraging & HotF"],["fishing","🎣 Fishing"]]],
+  ["Islands", [["map","🗺 Map"],["crimson","🔥 Crimson Isle"],["rift","🌀 Rift"]]],
+  ["Money", [["money","💰 Money"],["plan","🛒 Plan"],["auto","🧮 Auto bulk plan"]]]];
 const TABS = TAB_GROUPS.flatMap(g => g[1]);
+const TAB_NAME = Object.fromEntries(TABS);
 let tab = store.get("tab", "focus");
+// sub-tabs of each tab, for the tab search and for links that open a sub-tab
+const SUB_INDEX = {
+  shards:[["todo","To do"],["goals","By goal"],["fuse","Fusions"],["money","💰 Money making"],["where","Where to hunt"],["activity","📍 By activity"],["all","All shards"]],
+  money:[["methods","📋 Methods"],["passive","🤖 Passive income"],["trading","💱 Trading"]],
+  foraging:[["level","Level HotF"],["contests","🏆 Agatha & Miria contests"],["money","💰 Money while foraging"],["shards","🔮 Foraging shards"]],
+  slayers:[["overview","Overview"],["shards","🔮 All slayer shards"],["gear","🎒 All slayer items"]],
+  pets:[["mine","My pets"],["score","Pet Score"],["missing","Missing pets"],["shards","🔮 Pet shards"],["sell","🏷 Sell max pets"],["flips","💰 Levelling flips"]],
+  mining:[["level","Level HotM"],["money","💰 Money while mining"],["slots","⏲ Forge slots"],["forge","🔨 Forge profits"],["rare","🐛 Scatha & rare mobs"],["shards","🔮 Mining shards"]],
+  sblevel:[["left","🎯 Biggest XP left"],["all","📋 Every source"],["rewards","🎁 Level rewards"]],
+  crimson:[["rep","⚔ Reputation"],["dojo","🥋 Dojo"],["kuudra","🦑 Kuudra"],["daily","✅ Daily tasks"],["shards","🔮 Shards"]],
+  museum:[["order","Recommended order"],["missing","All missing items"]],
+  acc:[["best","Best MP per coin"],["up","Upgrades"],["miss","Missing families"],["tips","Milestones & tips"],["powers","💎 Powers"]],
+  bestiary:[["closest","Cheapest next tiers"],["area","By area"],["all","All families"]],
+  fishing:[["trophy","🏆 Trophy Fish"],["sea","🐙 Sea creatures"],["shards","🔮 Fishing shards"]],
+  garden:[["overview","Overview"],["ms","🌾 Crop milestones"],["visitors","🧑‍🌾 Visitors"],["shards","🔮 Farming shards"]],
+  minions:[["plan","💰 Cheapest next slots"],["all","All minions"]],
+  upgrades:[["cons","🍽 Permanent consumables"],["acct","🏦 Account & events"]],
+  rift:[["overview","Overview"],["quests","📜 Quests"]],
+  skills:[["overview","Overview"], ...[["FARMING","🌾"],["MINING","⛏"],["COMBAT","⚔"],["FORAGING","🪓"],["FISHING","🎣"],["ENCHANTING","📖"],["ALCHEMY","⚗"],["CARPENTRY","🪚"],["RUNECRAFTING","🔯"],["SOCIAL","💬"],["TAMING","🐾"],["HUNTING","🏹"]].map(([id, ic]) => [id, `${ic} ${id[0] + id.slice(1).toLowerCase()}`])],
+};
+// tabs that go well together: shown as links at the top of each tab
+const RELATED = {
+  focus:["sblevel","skills","history"],
+  history:["focus","sblevel"],
+  calendar:["focus","map","crimson/daily"],
+  sblevel:["skills","coll","museum","acc","bestiary"],
+  skills:["sblevel","garden","mining","foraging","fishing","combat"],
+  coll:["minions","skills","sblevel/all"],
+  museum:["sblevel","money"],
+  minions:["coll","money/passive","sblevel"],
+  upgrades:["sblevel","mf","acc"],
+  acc:["acc/powers","mf","sblevel","upgrades"],
+  pets:["mf","pets/flips","shards/all"],
+  shards:["mf","shards/money","mining/shards","foraging/shards","fishing/shards","garden/shards"],
+  mf:["bestiary","pets/score","slayers","shards"],
+  slayers:["bestiary","mf","slayers/shards","combat"],
+  combat:["crimson/kuudra","slayers","mf","skills/COMBAT"],
+  bestiary:["mf","slayers","map","skills/COMBAT"],
+  garden:["skills/FARMING","garden/shards","money"],
+  mining:["skills/MINING","mining/forge","mining/shards","money"],
+  foraging:["skills/FORAGING","foraging/shards","money"],
+  fishing:["skills/FISHING","fishing/shards","bestiary","crimson"],
+  map:["calendar","crimson","rift"],
+  crimson:["combat","crimson/shards","map/crimson"],
+  rift:["map/rift","calendar"],
+  money:["shards/money","mining/forge","pets/flips","minions","plan"],
+  plan:["auto","money"],
+  auto:["plan","money"],
+};
+// a link target: "tab", "tab/subtab", "tab/subtab#text to find", or "tab?filterId=text"
+function goSpec(spec){
+  const m = String(spec).match(/^([a-z]+)(?:\/([\w-]+))?(?:#(.+?))?(?:\?([\w-]+)=(.*))?$/);
+  return m && TAB_NAME[m[1]] ? {tab:m[1], pane:m[2], find:m[3], filt:m[4], q:m[5]} : null;
+}
+function goLabel(spec){
+  const g = goSpec(spec); if (!g) return "";
+  const sub = g.pane && (g.tab === "map" ? ISLANDS.find(i => i.id === g.pane)?.name : (SUB_INDEX[g.tab] || []).find(s => s[0] === g.pane)?.[1]);
+  return TAB_NAME[g.tab] + (sub ? ` › ${sub.replace(/^\p{Extended_Pictographic}\S*\s/u, "")}` : "");
+}
+const NAV = [];   // tabs you came from by following links, for the Back button
+function goTo(spec, push = true){
+  const g = goSpec(spec); if (!g) return;
+  $("#modal").classList.remove("on");
+  if (push && (g.tab !== tab || g.pane)){ NAV.push({tab, y:scrollY}); if (NAV.length > 30) NAV.shift(); }
+  if (g.pane){ if (g.tab === "map"){ MAP.isl = g.pane; store.set("mapIsl", g.pane); } else store.set("sub:" + g.tab, g.pane); }
+  tab = g.tab; store.set("tab", tab); render(); scrollTo(0, 0);
+  if (g.find || g.filt) seek(g);
+}
+function goBack(){
+  const p = NAV.pop(); if (!p) return;
+  tab = p.tab; store.set("tab", tab); render();
+  scrollTo(0, p.y); setTimeout(() => scrollTo(0, p.y), 400);
+}
+// find a row or box on the new tab (it may still be loading), show it and make it flash
+function seek(g){
+  const until = Date.now() + 8000;
+  const tick = () => {
+    const v = $("#view"); let el = null;
+    if (g.filt){ const inp = v.querySelector(`[data-filter="${CSS.escape(g.filt)}"]`); if (inp){ inp.value = g.q; inp.dispatchEvent(new Event("input", {bubbles:true})); el = inp.closest(".toolbar") || inp; } }
+    else {
+      const q = g.find.toLowerCase(), vis = x => !x.closest("[hidden]");
+      el = [...v.querySelectorAll("[data-anchor]")].find(x => x.dataset.anchor.toLowerCase() === q && vis(x))
+        || [...v.querySelectorAll("tr, .tile, .mitem, li")].find(x => x.textContent.toLowerCase().includes(q) && vis(x))
+        || [...v.querySelectorAll(".card, h3, h4")].find(x => x.textContent.toLowerCase().includes(q) && vis(x) && x.textContent.length < 400);
+      if (el?.classList.contains("lim")) el.closest("[data-limit]")?.classList.add("all");
+    }
+    if (el){ el.scrollIntoView({block:"center", behavior:"smooth"}); el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); return; }
+    if (Date.now() < until) setTimeout(tick, 250);
+  };
+  setTimeout(tick, 60);
+}
+const goTab = (spec, label) => `<a href="#" class="small golink" data-go="${esc(spec)}">${label} →</a>`;
+function relatedHTML(){
+  const R = (RELATED[tab] || []).filter(s => goSpec(s));
+  const back = NAV.length ? `<button class="ghost navback" data-navback title="Alt + ← also works">← Back to ${esc(TAB_NAME[NAV[NAV.length - 1].tab])}</button>` : "";
+  if (!R.length && !back) return "";
+  return `<div class="related">${back}${R.length ? `<span class="rlabel">Related</span>${R.map(s => `<a href="#" class="rchip" data-go="${esc(s)}">${esc(goLabel(s))}</a>`).join("")}` : ""}</div>`;
+}
 
 function renderTabs(){
   if (!CUR) return;
-  const n = getPlan().length;
+  const n = getPlan().length, fold = store.get("navFold", []);
   if (!TABS.some(t => t[0] === tab)) tab = "focus";
-  $("#tabs").innerHTML = TAB_GROUPS.map(([g, list]) => `<div class="tgroup">${g ? `<span class="tglabel">${g}</span>` : ""}${list.map(([k,name]) => `<button data-tab="${k}" class="${k===tab?"on":""}">${name}${k === "plan" && n ? ` (${n})` : ""}</button>`).join("")}</div>`).join("");
+  const groups = TAB_GROUPS.map(([g, list]) => { const shut = fold.includes(g) && !list.some(t => t[0] === tab);
+    return `<div class="tgroup${shut ? " shut" : ""}"><button class="tglabel" data-tgfold="${esc(g)}" aria-expanded="${!shut}" title="${shut ? "Show" : "Hide"} this group">${g}<span class="tgcar">▾</span></button>${list.map(([k,name]) => `<button data-tab="${k}" class="${k===tab?"on":""}">${name}${k === "plan" && n ? ` (${n})` : ""}</button>`).join("")}</div>`; }).join("");
+  if ($("#tgroups")) $("#tgroups").innerHTML = groups;
+  else $("#tabs").innerHTML = `<div class="tfind"><input id="tabFind" type="search" placeholder="🔍 Find a tab…  Ctrl+K" autocomplete="off"><div id="tfRes" hidden></div></div><div id="tgroups">${groups}</div>`;
 }
-$("#tabs").addEventListener("click", e => { const k = e.target.closest("[data-tab]")?.dataset.tab; if (!k) return; tab = k; store.set("tab", k); render(); });
+// tab search: matches tab names, their sub-tabs and map islands
+function tabFindResults(q){
+  q = q.trim().toLowerCase(); if (!q) return [];
+  const has = s => s.toLowerCase().includes(q), tabs = TABS.filter(([, n]) => has(n)).map(([k]) => k);
+  const subs = TABS.flatMap(([k]) => (SUB_INDEX[k] || []).filter(([p, l]) => p !== "overview" && has(l)).map(([p]) => `${k}/${p}`));
+  const isl = ISLANDS.filter(i => has(i.name)).map(i => `map/${i.id}`);
+  return [...tabs, ...subs, ...isl].slice(0, 14).map(s => [s, goLabel(s)]);
+}
+const tabFindShow = () => {
+  const f = $("#tabFind"), r = $("#tfRes"), hits = tabFindResults(f.value);
+  r.hidden = !f.value.trim(); $("#tgroups").hidden = !r.hidden;
+  r.innerHTML = hits.length ? hits.map(([s, l], i) => `<button data-go="${esc(s)}" class="${i ? "" : "sel"}">${esc(l)}</button>`).join("") : '<div class="muted small" style="padding:6px 10px">No tab matches.</div>';
+};
+const tabFindClear = () => { const f = $("#tabFind"); if (f && f.value){ f.value = ""; tabFindShow(); } };
+$("#tabs").addEventListener("input", e => { if (e.target.id === "tabFind") tabFindShow(); });
+$("#tabs").addEventListener("keydown", e => {
+  if (e.target.id !== "tabFind") return;
+  const L = [...$("#tfRes").querySelectorAll("button")], i = L.findIndex(b => b.classList.contains("sel"));
+  if (e.key === "ArrowDown" || e.key === "ArrowUp"){ e.preventDefault(); if (!L.length) return; const j = (i + (e.key === "ArrowDown" ? 1 : L.length - 1)) % L.length; L.forEach((b, x) => b.classList.toggle("sel", x === j)); }
+  else if (e.key === "Enter"){ e.preventDefault(); const b = L[i] || L[0]; if (b){ NAV.length = 0; goTo(b.dataset.go, false); tabFindClear(); e.target.blur(); } }
+  else if (e.key === "Escape"){ tabFindClear(); e.target.blur(); }
+});
+$("#tabs").addEventListener("click", e => {
+  const f = e.target.closest("[data-tgfold]");
+  if (f){ const g = f.dataset.tgfold, L = store.get("navFold", []); store.set("navFold", L.includes(g) ? L.filter(x => x !== g) : [...L, g]); renderTabs(); return; }
+  const r = e.target.closest("#tfRes [data-go]");
+  if (r){ e.stopPropagation(); NAV.length = 0; goTo(r.dataset.go, false); tabFindClear(); return; }
+  const k = e.target.closest("[data-tab]")?.dataset.tab; if (!k) return;
+  NAV.length = 0; tab = k; store.set("tab", k); render();
+});
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && $("#tabFind")){ e.preventDefault(); $("#tabFind").focus(); $("#tabFind").select(); }
+  else if (e.altKey && e.key === "ArrowLeft" && NAV.length && !e.target.matches?.("input, textarea, select")){ e.preventDefault(); goBack(); }
+});
+document.addEventListener("mouseup", e => { if (e.button === 3 && NAV.length){ e.preventDefault(); goBack(); } });
+document.addEventListener("click", e => { if (e.target.closest("[data-navback]")){ e.preventDefault(); goBack(); } });
 
 // Guide / plan buttons anywhere on the page
 document.addEventListener("click", e => {
@@ -6065,7 +6290,7 @@ function render(){
   const v = $("#view");
   const off = st.apiOff.length ? `<div class="msg err">No data for: <b>${st.apiOff.map(esc).join(", ")}</b>. Turn on these API settings in-game (SkyBlock Menu → Settings → API Settings), wait a few minutes, then reload.</div>` : "";
   const demo = st.demo ? `<div class="demo-note">🧪 Showing made-up demo data. Enter your username and API key above to see your own profile.</div>` : "";
-  v.innerHTML = demo + off + ({focus:viewFocus, money:viewMoney, sblevel:viewSbLevel, crimson:viewCrimson, map:viewMap, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, mf:viewMF, history:viewHistory}[tab])(st, A);
+  v.innerHTML = demo + off + relatedHTML() + ({focus:viewFocus, money:viewMoney, sblevel:viewSbLevel, crimson:viewCrimson, map:viewMap, calendar:viewCalendar, bestiary:viewBestiary, minions:viewMinions, garden:viewGarden, fishing:viewFishing, museum:viewMuseum, acc:viewAcc, shards:viewShards, foraging:viewForaging, mining:viewMining, slayers:viewSlayers, pets:viewPets, rift:viewRift, upgrades:viewUpgrades, plan:viewPlan, auto:viewAuto, skills:viewSkills, coll:viewColl, combat:viewCombat, mf:viewMF, history:viewHistory}[tab])(st, A);
   limitRows(v);
   setTimeout(fillShardCtx, 0);
   v.querySelectorAll("[data-filter]").forEach(inp => inp.addEventListener("input", () => filterTable(inp)));
@@ -6100,7 +6325,7 @@ function viewFocus(st, A){
     <div class="tiles wide">${pr.map((a,i) => `<div class="tile prio-tile${i < 3 ? " hot" : ""}" data-go="${a.key}" title="Open ${esc(String(a.name).replace(/<[^>]*>/g, ""))}">
       <div class="trow">${ring(a.pct, `<b>${Math.round(a.pct)}%</b>`)}<div style="flex:1;min-width:0"><div class="tname"><span class="rank">#${i+1}</span> ${a.name}</div>${bar(a.pct)}</div></div>
       <ul class="ttips">${a.tips.map(t => `<li>${t}</li>`).join("")}</ul>
-      <a href="#" class="tlink" onclick="tab='${a.key}';store.set('tab',tab);render();return false">Open ${a.name} →</a>
+      <a href="#" class="tlink" data-go="${a.key}">Open ${a.name} →</a>
     </div>`).join("")}</div>
   </div>`;
 }
@@ -6495,16 +6720,16 @@ async function fillMF(){
     const ups = [];
     const add = (name, gain, cost, how, kind = "buy") => { if (gain > 0) ups.push({name, gain:Math.round(gain * 10) / 10, cost, how, kind, per:cost != null ? cost / gain : null}); };
     if (comm < 5) add(`Community Shop Magic Find ${["I", "II", "III", "IV", "V"][comm]}`, 1, 0, `Free at Elizabeth (SkyBlock Menu → Community Shop → Account upgrades). Takes ${MF_COMM_DAYS[comm]} day${MF_COMM_DAYS[comm] === 1 ? "" : "s"} to finish.`, "free");
-    if (cLv < 60) add(`Combat ${cLv + 1}`, MF_COMBAT(cLv + 1) - MF_COMBAT(cLv), 0, `Level Combat (slayers, mobs, bestiary milestones). ${goTab("skills", "Skills")}`, "free");
+    if (cLv < 60) add(`Combat ${cLv + 1}`, MF_COMBAT(cLv + 1) - MF_COMBAT(cLv), 0, `Level Combat (slayers, mobs, bestiary milestones). ${goTab("skills/COMBAT", "Combat skill")}`, "free");
     if (cRow && cRow.level < 10){
       const each = cRow.bestCost;
-      add(`Cinderbat attribute ${cRow.level} → ${cRow.level + 1}`, 0.5, each ? cRow.need * each : null, `${fmt(cRow.need)} Cinderbat shard${cRow.need === 1 ? "" : "s"} to syphon${each ? ` at ≈ ${fmt(each)} each${cRow.fusion && cRow.fusion.cost < (cRow.price || Infinity) ? " (cheapest by fusing)" : ""}` : ""}. ${goTab("shards", "Shards")}`);
+      add(`Cinderbat attribute ${cRow.level} → ${cRow.level + 1}`, 0.5, each ? cRow.need * each : null, `${fmt(cRow.need)} Cinderbat shard${cRow.need === 1 ? "" : "s"} to syphon${each ? ` at ≈ ${fmt(each)} each${cRow.fusion && cRow.fusion.cost < (cRow.price || Infinity) ? " (cheapest by fusing)" : ""}` : ""}. ${goTab("shards/all#Cinderbat", "Cinderbat in Shards")}`);
       if (cRow.level < 9 && each) add(`Cinderbat attribute ${cRow.level} → 10`, (10 - cRow.level) * 0.5, cRow.toMax * each, `${fmt(cRow.toMax)} shards in total to max it.`);
     }
     if (D.nextMs){   // cheapest pets that reach the next Pet Score milestone (one rarity per pet)
       let need = D.nextMs[0] - D.score, cost = 0; const pick = [], used = new Set();
       for (const o of D.opts.filter(o => o.price).sort((a, b) => a.per - b.per)){ if (need <= 0) break; if (used.has(o.type)) continue; used.add(o.type); pick.push(o); need -= o.gain; cost += o.price; }
-      if (need <= 0) add(`Pet Score ${D.nextMs[0]} (+1)`, 1, cost, `${D.nextMs[0] - D.score} more Pet Score: buy ${pick.slice(0, 5).map(o => `${esc(petName(o.type))} (${esc(prettyKey(o.tier))}, ${fmt(o.price)})`).join(", ")}${pick.length > 5 ? ` and ${pick.length - 5} more cheap pets` : ""}. ${goTab("pets", "Pets")}`);
+      if (need <= 0) add(`Pet Score ${D.nextMs[0]} (+1)`, 1, cost, `${D.nextMs[0] - D.score} more Pet Score: buy ${pick.slice(0, 5).map(o => `${esc(petName(o.type))} (${esc(prettyKey(o.tier))}, ${fmt(o.price)})`).join(", ")}${pick.length > 5 ? ` and ${pick.length - 5} more cheap pets` : ""}. ${goTab("pets/score", "Pet Score")}`);
     }
     if (gifts < 5) add(`Divine Gift (${gifts + 1} of 5)`, 1, P("DIVINE_GIFT") ?? 20e6, `${P("DIVINE_GIFT") ? "Bazaar" : "Regalia Room, 20M"}; eat it for a permanent +1. The Regalia Room sells 5 a SkyBlock year.`);
     if (g.anguish < 3){ const to = 3, next = g.anguish + 1, pNext = P(MF_ANGUISH[next]), pCur = g.anguish ? P(MF_ANGUISH[g.anguish]) || 0 : 0;
@@ -6806,7 +7031,6 @@ function famProgress(K, area, [name, cap, br, keys]){
   return {area, name, kills, cap, tier, max:th.length, next:th[tier], prev:tier ? th[tier - 1] : 0, critter};
 }
 const allFamilies = st => BESTIARY_ALL.flatMap(([area, fams]) => fams.map(f => famProgress(st.bestiary || {}, area, f)));
-const goTab = (k, label) => `<a href="#" class="small" onclick="tab='${k}';store.set('tab',tab);render();return false">${label} →</a>`;
 function famTable(rows, limit, id){
   return `<div class="card"><table ${id ? `id="${id}"` : ""} data-limit="${limit}"><thead><tr><th>Family</th><th>Area</th><th>Kills</th><th style="width:26%">Tier</th></tr></thead><tbody>
     ${rows.map(f => `<tr class="clk" data-mob="${esc(f.area)}|${esc(f.name)}"${f.tier >= f.max ? ' style="opacity:.65"' : ""}><td><b>${esc(f.name)}</b></td><td class="small muted">${esc(f.area)}</td><td>${fmt(f.kills)}</td>
@@ -7412,7 +7636,7 @@ function mapPanelHTML(st, A, id){
     ${i.zones ? `<h4>Zones</h4><div class="mzones">${i.zones.split(", ").map(z => `<span>${esc(z)}</span>`).join("")}</div>` : ""}`;
   const quests = (X.quests || []).length ? `<div class="mlist">${X.quests.map(([n, d, npc, rew, w]) => `<div class="mitem"><div><b>${esc(n)}</b> <span class="muted small">· ${esc(w)}</span></div>
       <div class="small">${esc(d)}</div><div class="small muted">${npc && npc !== "—" ? `🧑 ${esc(npc)} · ` : ""}🎁 ${esc(rew || "—")}</div></div>`).join("")}</div>
-      ${i.id === "rift" ? `<p class="small">${goTab("rift", "Rift quests and Timecharms")}</p>` : ""}` : "";
+      ${i.id === "rift" ? `<p class="small">${goTab("rift/quests", "Rift quests and Timecharms")}</p>` : ""}` : "";
   const soulPane = souls.length ? `<p class="muted small">Hypixel only shares your total (${st.raw?.fairy_soul?.total_collected ?? "?"}/289), not which souls you've found, so tick them off here. Saved in this browser. Coordinates are X Y Z (press F3 in-game).</p>
     <div class="card"><table><thead><tr><th></th><th>Where</th><th>X Y Z</th></tr></thead><tbody>
     ${souls.map(([sid, x, y, z, zone, hint, walk]) => `<tr class="${found[sid] ? "fsdone" : ""}"><td><input type="checkbox" data-fsoul="${esc(sid)}" ${found[sid] ? "checked" : ""} aria-label="Found ${esc(sid)}"></td>
@@ -7505,6 +7729,7 @@ function openInfo(title, body){
   m.innerHTML = `<div class="box"><div class="head"><h2>${title}</h2><div>${modalBack.length ? '<button class="ghost" data-mback>← Back</button>' : ""}<button class="ghost" data-close>Close</button></div></div>${body}</div>`;
   limitRows(m);
 }
+const popGo = (...L) => { const h = L.filter(([spec]) => goSpec(spec) && (goSpec(spec).tab !== tab || /[?]/.test(spec))).map(([spec, label]) => goTab(spec, label)).join(" · "); return h ? `<p class="golinks">${h}</p>` : ""; };
 const infoStats = list => `<div class="grid compact" style="margin-bottom:12px">${list.filter(Boolean).map(([t, b, s, p]) => statCard(t, b, s, p)).join("")}</div>`;
 // a collection: every tier with its amount and unlocks
 function openCollection(id){
@@ -7517,6 +7742,7 @@ function openCollection(id){
     infoStats([["Tier", `${c.tier}/${c.maxTiers}`, c.tier >= c.maxTiers ? "Maxed" : `next at ${fmt(c.next)}`, pct(c.tier, c.maxTiers)], ["You have", fmt(c.amount), "co-op total", null],
       c.next ? ["To next tier", fmt(c.next - c.amount), `${pct(c.amount - c.prev, c.next - c.prev)}% of the way`, pct(c.amount - c.prev, c.next - c.prev)] : null])
     + `<div class="card"><table><thead><tr><th>Tier</th><th>Amount</th><th>Unlocks</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${popGo([`coll#${c.name}`, "📦 Open in Collections"])}
     <p class="small">${ilink(id, `📖 Recipe, price and wiki for ${esc(c.name)}`)}</p>`);
 }
 // a pet you own
@@ -7536,6 +7762,7 @@ function openPet(key){
       ${others.length ? `<li><span class="mtag">📋</span><span>You also own: ${others.map(o => `${esc(prettyKey(o.tier))} lv ${o.level}`).join(", ")}</span></li>` : ""}</ul>
     ${prices.some(x => x[1]) ? `<h4>Lowest BIN by rarity</h4><div class="mzones">${prices.map(([t, pr]) => `<span><b style="color:${PET_COLOR[t] || "inherit"}">${esc(prettyKey(t))}</b> ${pr ? fmt(pr) : "—"}</span>`).join("")}</div>` : '<p class="muted small">Prices load with the Pets tab.</p>'}
     ${p.level >= p.max ? (() => { const r = petSellRows(st).find(x => x.p === p) || petSellRows(st).find(x => x.p.type === p.type && x.p.tier === p.tier && x.p.exp === p.exp); return r && r.quick ? `<h4>🏷 Selling it</h4><p>List it for <b>${coinsExact(r.quick)}</b> to sell quickly${r.patient > r.quick ? `, or <b>${coinsExact(r.patient)}</b> if you can wait` : ""}. <span class="muted small">(${esc(r.why)}. More in Pets → Sell max pets.)</span></p>` : ""; })() : ""}
+    ${popGo([`pets/mine#${petName(type)}`, "🐾 Open in Pets"], ["pets/score", "🏅 Pet Score"], ["mf", "✨ Magic Find"])}
     <p class="small"><a href="https://hypixelskyblock.minecraft.wiki/w/${encodeURIComponent(petName(type).replace(/ /g, "_"))}_Pet" target="_blank" rel="noopener">Open on the wiki ↗</a></p>`);
 }
 // a bestiary family / mob
@@ -7554,6 +7781,7 @@ function openMob(key){
     ${sea.length ? `<p class="small">🎣 Sea creature: ${sea.map(([, s]) => `${rar(String(s[1]).toUpperCase(), s[1])} · Fishing ${s[2]}${s[3] ? ` · ${esc(s[3])} chance` : ""}${s[4] ? ` · ${esc(s[4])}` : ""}`).join("; ")}</p>` : ""}
     ${drops ? `<h4>Rare drops</h4><div class="card"><table><tbody>${drops.map(d => `<tr><td>${esc(d[0])}</td><td class="small">${pctTxt(d[1])}${d[2] ? " · Pet Luck applies" : ""}</td></tr>`).join("")}</tbody></table></div>` : ""}
     <h4>Kills per tier</h4><div class="tiles floors">${th.map((k, i) => `<div class="tile floor${f.kills >= k ? " maxed" : ""}"><div class="fnum">${i + 1}</div><div class="tbig">${fmt(k)}</div><div class="small muted">${f.kills >= k ? "✓ done" : `${fmt(k - f.kills)} to go`}</div></div>`).join("")}</div>
+    ${popGo([`bestiary/all#${name}`, "👾 Open in Bestiary"], [`mf?mdtab=${name}`, "✨ Drop chances with your Magic Find"])}
     <div data-mob-shards="${esc(name)}"></div>
     <p class="small"><a href="https://hypixelskyblock.minecraft.wiki/w/${encodeURIComponent(name.replace(/ /g, "_"))}" target="_blank" rel="noopener">Open on the wiki ↗</a></p>`);
   // shards you can get from it (loads in the background)
@@ -7572,7 +7800,8 @@ function openMinion(id){
     + `<div class="card"><table><thead><tr><th>Tier</th><th>Recipe</th><th>Cost now</th><th></th></tr></thead><tbody>
     ${tiers.map((r, i) => { const c = r ? minionCost(r) : null; return `<tr${have[i] ? ' class="done"' : ""}><td><b>${i + 1}</b></td><td class="small">${r ? r.split(" ").map(p => { const [iid, n] = p.split("*"); return `${n ? n + "× " : ""}${ilink(iid)}`; }).join(", ") : '<span class="muted">not craftable</span>'}${i ? ` <span class="muted">+ tier ${i}</span>` : ""}</td>
       <td class="small">${c && c.coins ? fmt(c.coins) : "—"}</td><td>${have[i] ? '<span class="good">✓</span>' : ""}</td></tr>`; }).join("")}
-    </tbody></table></div><p class="muted small">Costs use instant-buy prices once the market has loaded (open the Minions tab first).</p>`);
+    </tbody></table></div><p class="muted small">Costs use instant-buy prices once the market has loaded (open the Minions tab first).</p>
+    ${popGo([`minions/all#${name}`, "🤖 Open in Minions"])}`);
 }
 // a trophy fish
 function openTrophy(k){
@@ -7582,7 +7811,7 @@ function openTrophy(k){
     infoStats([["Caught", fmt(total), "all tiers", null], ...TROPHY_TIERS.map(x => [`${{bronze:"🥉", silver:"🥈", gold:"🥇", diamond:"💎"}[x]} ${prettyKey(x)}`, fmt(+t[`${k}_${x}`] || 0), (+t[`${k}_${x}`] || 0) ? "caught" : "not yet", null])])
     + `<p>📍 <b>How to catch it:</b> ${esc(f[3])}</p>
     <p class="small muted">Gold is guaranteed by the 100th catch of this fish and Diamond by the 600th (pity). ${total < 100 ? `${100 - total} more catches to guaranteed Gold.` : total < 600 ? `${600 - total} more to guaranteed Diamond.` : ""}</p>
-    <p class="small"><a href="#" data-mapgo="crimson">Open the Crimson Isle on the map →</a></p>`);
+    <p class="small"><a href="#" data-mapgo="crimson">Open the Crimson Isle on the map →</a>${tab !== "fishing" ? ` · ${goTab(`fishing/trophy#${f[1]}`, "🏆 Open in Fishing")}` : ""}</p>`);
 }
 // an NPC from the map
 async function openNpc(key){
@@ -7612,8 +7841,8 @@ document.addEventListener("click", e => {
   else if (t.dataset.minion) openMinion(t.dataset.minion);
   else if (t.dataset.tfish) openTrophy(t.dataset.tfish);
   else if (t.dataset.npc) openNpc(t.dataset.npc);
-  else if (t.dataset.mapgo){ $("#modal").classList.remove("on"); MAP.isl = t.dataset.mapgo; store.set("mapIsl", MAP.isl); tab = "map"; store.set("tab", tab); render(); }
-  else if (t.dataset.go){ tab = t.dataset.go; store.set("tab", tab); render(); scrollTo(0, 0); }
+  else if (t.dataset.mapgo) goTo("map/" + t.dataset.mapgo);
+  else if (t.dataset.go) goTo(t.dataset.go);
 });
 
 // ---------- keyboard access: everything clickable can be reached with Tab and opened with Enter or Space ----------
@@ -7844,7 +8073,7 @@ function skillPane(st, s){
     </div>
     <div class="toolbar"><label class="chk">Your XP per hour <input type="number" min="0" step="1000" class="skrate" data-skill="${s.id}" value="${rate || ""}" placeholder="e.g. 500000" style="width:120px"></label>
       <span class="muted small">Optional: fills in the time estimates. Saved in this browser.</span>
-      ${link.tab ? `<span class="sp" style="flex:1"></span><a href="#" class="small" onclick="tab='${link.tab[0]}';store.set('tab',tab);render();return false">Open ${link.tab[1]} →</a>` : ""}</div>
+      ${link.tab ? `<span class="sp" style="flex:1"></span><a href="#" class="small" data-go="${link.tab[0]}">Open ${link.tab[1]} →</a>` : ""}</div>
     <div class="cols2">
       <div><h3 class="ph">How to level it</h3><ul class="small" style="padding-left:18px;margin:4px 0">${(SKILL_TIPS[s.id] || []).map(t => `<li>${esc(t)}</li>`).join("")}</ul>
         ${R?.description ? `<p class="muted small">${esc(stripMc(R.description))}</p>` : ""}
