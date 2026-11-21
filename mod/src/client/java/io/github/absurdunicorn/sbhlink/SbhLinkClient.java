@@ -10,6 +10,9 @@ import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.FormattedText;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
@@ -31,6 +34,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
@@ -41,7 +45,7 @@ import java.util.regex.Pattern;
  *
  * Writes down things your game already shows you on Hypixel SkyBlock, as lines of text in a file on your PC
  * (%APPDATA%/SkyBlock Helper Link/events.jsonl), which the SkyBlock Helper app reads:
- *   - your own system messages: Bazaar orders, shard catches, fusions, charms, syphons, rare drops, slayer quests,
+ *   - your own system messages: Bazaar orders, shard catches, fusions, charms, syphons, rare and pet drops, slayer quests,
  *     sea creature catches, Loot Share shards, and the end-of-run summary of dungeons and Kuudra
  *   - skill XP gains shown in the action bar
  *   - your area and purse from the sidebar
@@ -64,6 +68,7 @@ public class SbhLinkClient implements ClientModInitializer {
 		+ "|CHARM! You charmed "
 		+ "|You used Syphon on "
 		+ "|(RARE|VERY RARE|CRAZY RARE|INSANE|PRAY TO RNGESUS) DROP! "
+		+ "|PET DROP! "
 		+ "|HIVE! You found "
 		+ "|SLAYER QUEST (STARTED|COMPLETE|FAILED)!"
 		+ "|SLAYER BOSS! The .+ spawned!"
@@ -104,7 +109,32 @@ public class SbhLinkClient implements ClientModInitializer {
 		if (!KEEP.matcher(text).find()) return;
 		int cut = text.indexOf(" for assisting");   // Loot Share: drop the other player's name
 		if (text.startsWith("LOOT SHARE") && cut > 0) text = text.substring(0, cut);
+		if (text.startsWith("PET DROP! ")) { String r = petRarity(message); if (r != null) text += " [" + r + "]"; }   // the rarity is only shown by its colour
 		write(text);
+	}
+
+	// the pet name's colour in a PET DROP line: white common, green uncommon, blue rare, purple epic, gold legendary, pink mythic
+	private static final int[] RARITY_COLOR = {0xFFFFFF, 0x55FF55, 0x5555FF, 0xAA00AA, 0xFFAA00, 0xFF55FF};
+	private static final String[] RARITY = {"COMMON", "UNCOMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC"};
+	private static final String RARITY_CODES = "fa956d";
+	private static final Pattern PET_CODE = Pattern.compile("PET DROP!(?:§.|\\s)*§([0-9a-f])");
+
+	private static String petRarity(Component message) {
+		Matcher m = PET_CODE.matcher(message.getString());   // older-style text keeps § codes in the string itself
+		if (m.find()) { int i = RARITY_CODES.indexOf(m.group(1).charAt(0)); if (i >= 0) return RARITY[i]; }
+		String[] found = {null};
+		boolean[] after = {false};
+		message.visit((FormattedText.StyledContentConsumer<Object>) (style, part) -> {
+			if (after[0] && !part.isBlank()) {
+				TextColor c = style.getColor();
+				if (c != null) for (int k = 0; k < RARITY_COLOR.length; k++)
+					if (RARITY_COLOR[k] == c.getValue()) { found[0] = RARITY[k]; break; }
+				return Optional.of(Boolean.TRUE);   // only the first coloured word after "PET DROP!" is the pet
+			}
+			if (part.contains("PET DROP!")) after[0] = true;
+			return Optional.empty();
+		}, Style.EMPTY);
+		return found[0];
 	}
 
 	private void skillXp(String bar) {

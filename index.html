@@ -3802,7 +3802,8 @@ function linkParse(e){
   if ((x = m.match(/^\[Bazaar\] Claimed ([\d,.]+) coins from selling ([\d,]+)x (.+?) at ([\d,.]+) each/))) return {t, k:"claim", side:"sell", coins:linkNum(x[1]), n:linkNum(x[2]), name:x[3].trim(), each:linkNum(x[4])};
   if ((x = m.match(/^\[Bazaar\] Claimed ([\d,]+)x (.+?) worth ([\d,.]+) coins bought for ([\d,.]+) each/))) return {t, k:"claim", side:"buy", coins:linkNum(x[3]), n:linkNum(x[1]), name:x[2].trim(), each:linkNum(x[4])};
   if ((x = m.match(/^\[Bazaar\] (Sold|Bought) ([\d,]+)x (.+?) for ([\d,.]+) coins/))) return {t, k:"instant", side:x[1] === "Sold" ? "sell" : "buy", n:linkNum(x[2]), name:x[3].trim(), coins:linkNum(x[4])};
-  if ((x = m.match(/^((?:VERY |CRAZY )?RARE|INSANE|PRAY TO RNGESUS) DROP! (.+?)(?: \(\+([\d,.]+) ?✯? ?Magic Find\))?$/))) return {t, k:"drop", tier:x[1], name:x[2], mf:x[3] ? linkNum(x[3]) : null};
+  if ((x = m.match(/^PET DROP! (.+?)(?: \(\+([\d,.]+)%? ?✯? ?Magic Find\))?(?: \[([A-Z]+)\])?$/))) return {t, k:"drop", tier:"PET", name:x[1], mf:x[2] ? linkNum(x[2]) : null, rarity:x[3] || null};
+  if ((x = m.match(/^((?:VERY |CRAZY )?RARE|INSANE|PRAY TO RNGESUS) DROP! (.+?)(?: \(\+([\d,.]+)%? ?✯? ?Magic Find\))?$/))) return {t, k:"drop", tier:x[1], name:x[2], mf:x[3] ? linkNum(x[3]) : null};
   return null;
 }
 // sessions: runs of events with under `gap` between them; returns [{t0, t1, items}]
@@ -6615,6 +6616,14 @@ async function fillMobDrops(){
       const c = famByName[mob.name.toLowerCase()] || []; if (c.length) return c.length === 1 ? c[0] : c.find(p => mob.where && mob.where.includes(p.area)) || null;
       return byName(mob.name.replace(/s*(.*)$/, "")); };
     const famCache = new Map(), bestOf = mob => { if (!famCache.has(mob)){ const f = famOf(mob); famCache.set(mob, {f, mf:f && !f.critter && useBest && hasBest ? 3 * f.tier : 0}); } return famCache.get(mob); };
+    // your drops from the game link: "scythe blade", or "enderman pet|legendary" for pets
+    const got = {};
+    for (const e of LINK.events || []){ if (e.k !== "drop") continue;
+      const k = e.tier === "PET" ? `${e.name.replace(/\s+Pet$/i, "")} pet|${(e.rarity || "").toLowerCase()}`.toLowerCase() : e.name.toLowerCase();
+      const g = got[k] ||= {n:0, last:0}; g.n++; g.last = Math.max(g.last, e.t); }
+    const gotOf = (name, pet) => { if (!pet) return got[name.toLowerCase()] ? [got[name.toLowerCase()], ""] : null;
+      const x = name.match(/^(.+?) \((\w+)\)$/), base = (x ? x[1] : name).toLowerCase(), exact = got[`${base}|${(x ? x[2] : "").toLowerCase()}`], any = got[`${base}|`];
+      return exact ? [exact, ""] : any ? [any, " (rarity not recorded)"] : null; };
     let rows = mobs.flatMap(mob => mob.rows.map(r => {
       const x = String(r.item).match(/^\$([curelm])\$\s*(.+)$/), pet = /\bPet$/.test(x ? x[2] : r.item);
       const name = (x ? `${wikiTxt(x[2])} (${MOB_RAR[x[1]]})` : wikiTxt(r.item)).replace(/&([^&]+)&/g, "($1)");
@@ -6633,7 +6642,7 @@ async function fillMobDrops(){
       ${useBest && !hasBest ? '<div class="msg">No bestiary kills in your profile data (turn on the Bestiary API setting in-game), so no bestiary Magic Find is added.</div>' : ""}
       <div class="card"><table id="mdtab" data-limit="40"><thead><tr><th>Mob</th><th>Drop</th><th>Amount</th><th>Base chance</th><th>Bestiary MF</th><th>With your MF</th><th>Kills per drop</th></tr></thead><tbody>
       ${rows.map(r => `<tr><td>${esc(r.mob.name)}${r.mob.level ? ` <span class="muted small">Lv ${esc(r.mob.level)}</span>` : ""}${r.mob.where ? `<div class="muted small">${esc(r.mob.where)}</div>` : ""}</td>
-        <td>${esc(r.name)}${r.pet && pl ? ' <span class="muted small">(+ Pet Luck)</span>' : ""}</td><td class="small">${esc(r.cnt)}</td>
+        <td>${esc(r.name)}${r.pet && pl ? ' <span class="muted small">(+ Pet Luck)</span>' : ""}${(() => { const g = gotOf(r.name, r.pet); return g ? `<div class="small good" title="Counted by the game link since it started; same item from any mob">🎮 You got ${g[0].n}${g[1]}, last ${new Date(g[0].last).toLocaleDateString()}</div>` : ""; })()}</td><td class="small">${esc(r.cnt)}</td>
         <td class="muted">${ch(r.p)}</td><td class="small">${!r.fam ? '<span class="muted">—</span>' : r.fam.critter ? '<span class="muted">critter (Hunting Fortune)</span>' : `${r.bmf ? `<b>+${r.bmf}</b>` : "+0"} <span class="muted">tier ${r.fam.tier}/${r.fam.max}</span>`}</td><td class="${r.yours > r.p ? "good" : ""}">${ch(r.yours)}${r.bmf ? `<div class="muted small">${Math.min(mf + r.bmf, MF_CAP())} MF here</div>` : ""}</td>
         <td class="small">${r.p >= 1 ? "every kill" : `${fmt(Math.round(1 / r.p))} → <b>${r.yours >= 1 ? "every kill" : fmt(Math.round(1 / r.yours))}</b>`}</td></tr>`).join("") || '<tr><td colspan="7" class="muted">No drops.</td></tr>'}
       </tbody></table></div>
