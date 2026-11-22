@@ -3351,7 +3351,23 @@ const MONEY_DEF = {buy:"instant", sell:"offer", minVol:10000, tax:1.25, cap:50, 
 // Cheapest way to get one of each shard: buy it, or fuse it from the cheapest inputs (which may themselves be fused).
 // Each round allows one more level of fusion below, so depth 3 = up to two fusion steps before the final one.
 let COST_CACHE = null;
-function shardCostStages(S, bz, o){
+// Heavy calculations are generators: they yield every few ms. drainGen runs one to the end at once; sliceGen runs it
+// in short slices between which the app can draw and take clicks, so a big recalculation never freezes the window.
+const drainGen = g => { let r; while (!(r = g.next()).done); return r.value; };
+const yieldToApp = () => globalThis.scheduler?.yield ? scheduler.yield() : new Promise(r => setTimeout(r, 0));
+async function sliceGen(g){
+  for (;;){ const t = performance.now(); let r;
+    do { r = g.next(); if (r.done) return r.value; } while (performance.now() - t < 12);
+    await yieldToApp(); }
+}
+// the same slow result asked for twice at once is only worked out once
+const SLICE_RUNNING = new Map();
+function sliceOnce(key, make){
+  if (SLICE_RUNNING.has(key)) return SLICE_RUNNING.get(key);
+  const pr = sliceGen(make()).finally(() => SLICE_RUNNING.delete(key)); SLICE_RUNNING.set(key, pr); return pr;
+}
+const shardCostStages = (S, bz, o) => drainGen(shardCostStagesGen(S, bz, o));
+function* shardCostStagesGen(S, bz, o){
   const key = [bz.t, o.buy, o.minVol, o.depth].join("|");
   if (COST_CACHE?.key === key) return COST_CACHE.stages;
   const px = id => bz.m[S.by[id]?.bz];
@@ -3370,7 +3386,7 @@ function shardCostStages(S, bz, o){
       if (c < nc[out] * 0.999){ nc[out] = c; nh[out] = {a, b, qty:+qty}; nl[out] = 1 + Math.max(cur.lvl[a], cur.lvl[b]); }
     }
     cur = {cost:nc, how:nh, lvl:nl, prev:cur};
-    stages.push(cur);
+    stages.push(cur); yield;
   }
   COST_CACHE = {key, stages};
   return stages;
@@ -3387,20 +3403,29 @@ function chainNeeds(S, C, id, amount, acc = {buy:{}, fusions:0}){
 }
 // a few recent results are kept: the money pane asks for several option sets in a row, and a single slot evicted each in turn
 const MONEY_CACHE = new Map();
+const moneyKey2 = (bz, o) => [bz.t, o.buy, o.sell, o.minVol, o.tax, o.cap, o.sort, o.depth].join("|");
 function moneyResults(S, bz, o){
-  const ck = [bz.t, o.buy, o.sell, o.minVol, o.tax, o.cap, o.sort, o.depth].join("|");
-  const hit = MONEY_CACHE.get(ck); if (hit && hit.S === S) return hit.res;
-  const res = moneyResultsCalc(S, bz, o);
+  const hit = MONEY_CACHE.get(moneyKey2(bz, o)); if (hit && hit.S === S) return hit.res;
+  return drainGen(moneyResultsGen(S, bz, o));
+}
+async function moneyResultsAsync(S, bz, o){
+  const ck = moneyKey2(bz, o), hit = MONEY_CACHE.get(ck); if (hit && hit.S === S) return hit.res;
+  return sliceOnce("m" + ck, () => moneyResultsGen(S, bz, o));
+}
+function* moneyResultsGen(S, bz, o){
+  const res = yield* moneyResultsCalc(S, bz, o), ck = moneyKey2(bz, o);
   MONEY_CACHE.set(ck, {S, res}); if (MONEY_CACHE.size > 8) MONEY_CACHE.delete(MONEY_CACHE.keys().next().value);
   return res;
 }
-function moneyResultsCalc(S, bz, o){
+function* moneyResultsCalc(S, bz, o){
   const tax = 1 - (+o.tax || 0) / 100, res = [];
   const px = id => bz.m[S.by[id]?.bz];
-  const stages = shardCostStages(S, bz, o);
+  const stages = yield* shardCostStagesGen(S, bz, o);
+  let step = 0;
   const outP = p => o.sell === "instant" ? p.bid : p.ask, outV = p => o.sell === "instant" ? p.bidVol : p.askVol;
   const key = o.sort === "roi" ? "roi" : o.sort === "fusion" ? "p" : "daily";
   for (const [out, byQty] of Object.entries(S.rec)){
+    if (++step % 25 === 0) yield;
     const po = px(out); if (!po) continue;
     const sell = outP(po), ov = outV(po) || 0;
     if (!(sell > 0) || ov < o.minVol) continue;
@@ -3449,9 +3474,17 @@ function chainTreeHTML(S, C, bz, o, id, amount, depth = 0){
 const FARM_LAMBDAS = [1e5, 3e5, 7e5, 1.5e6, 3e6, 5e6, 8e6, 1.2e7, 2e7, 3.5e7, 6e7, 1e8];
 // several option sets are in use at once (the money pane, Mining, Foraging): a few results are kept
 const FARM_CACHE = new Map();
+const farmKey = (bz, o) => [bz.t, o.buy, o.sell, o.minVol, o.tax, o.speed, o.hours, o.minRate, o.depth, o.myRates ? "my" + LINK.ratesVer : ""].join("|");
 function farmPlans(S, bz, o){
-  const ck = [bz.t, o.buy, o.sell, o.minVol, o.tax, o.speed, o.hours, o.minRate, o.depth, o.myRates ? "my" + LINK.ver : ""].join("|");
-  const fhit = FARM_CACHE.get(ck); if (fhit && fhit.S === S) return fhit.res;   // new shard data (S) needs its own flat copy
+  const fhit = FARM_CACHE.get(farmKey(bz, o)); if (fhit && fhit.S === S) return fhit.res;   // new shard data (S) needs its own flat copy
+  return drainGen(farmPlansGen(S, bz, o));
+}
+async function farmPlansAsync(S, bz, o){
+  const ck = farmKey(bz, o), fhit = FARM_CACHE.get(ck); if (fhit && fhit.S === S) return fhit.res;
+  return sliceOnce("f" + ck, () => farmPlansGen(S, bz, o));
+}
+function* farmPlansGen(S, bz, o){
+  const ck = farmKey(bz, o);
   const tax = 1 - (+o.tax || 0) / 100, share = 0.25, hours = Math.max(0.5, +o.hours || 2), speed = (+o.speed || 50) / 100;
   const depth = Math.max(1, Math.min(4, +o.depth || 3));
   const px = id => bz.m[S.by[id]?.bz];
@@ -3497,9 +3530,11 @@ function farmPlans(S, bz, o){
       }
       c = nc; tm = nt; how = nh; ha = na; hb = nb; hq = nq;
       stages.push({c, t:tm, how, ha, hb, hq, prev:stages[stages.length - 1]});
+      yield;
     }
     // final fusion, scored by real coins per hour
     for (const C of stages) for (let r = 0; r < R; r++){
+      if ((r & 16383) === 0) yield;
       const out = F.out[r], sp = sell[out]; if (!sp) continue;
       const a = F.a[r], b = F.b[r]; if (!C.how[a] || !C.how[b]) continue;
       const fa = F.fuse[a], fb = F.fuse[b], q = F.q[r];
@@ -3523,6 +3558,7 @@ function farmPlans(S, bz, o){
   };
   const depthOf = (C, id) => { const i = I[id]; return C.how[i] === 3 ? 1 + Math.max(depthOf(C.prev || C, ids[C.ha[i]]), depthOf(C.prev || C, ids[C.hb[i]])) : 0; };
   const res = [];
+  yield;
   for (const p of best.values()){
     const need = {farm:{}, buy:{}, fusions:1};
     if (p.a === p.b) expand(p.C, p.a, p.fa + p.fb, need); else { expand(p.C, p.a, p.fa, need); expand(p.C, p.b, p.fb, need); }
@@ -3940,6 +3976,8 @@ function linkApply(){
   }
   Object.assign(LINK, {open, openBuy, claims:claims.slice(-30).reverse(), drops:drops.slice(-30).reverse(), fuses, loot, refunds, purse, ordersAt, speeds, sea, xp, area,
     rates:rates});
+  const rk = Object.keys(rates).sort().map(id => id + ":" + linkRate(id)).filter(x => !/:0$/.test(x)).join(",");
+  if (rk !== LINK.ratesKey){ LINK.ratesKey = rk; LINK.ratesVer = (LINK.ratesVer || 0) + 1; }
   // keep the app's "your sell offer" in step with what the game said
   if (SHARDS){
     const was = store.get("linkOpen", []), now = [];
@@ -3954,7 +3992,8 @@ function linkApply(){
   LINK.ver++;
 }
 // measured catches per hour for a shard (only once there's enough to trust)
-const linkRate = id => { const r = LINK.rates[id]; return r && r.n >= 20 && r.h >= 0.25 ? r.perHr : 0; };
+const sig2 = x => { if (!(x > 0)) return 0; const p = 10 ** (Math.floor(Math.log10(x)) - 1); return Math.round(x / p) * p; };
+const linkRate = id => { const r = LINK.rates[id]; return r && r.n >= 20 && r.h >= 0.25 ? sig2(r.perHr) : 0; };
 // a measured speed for a Methods-tab key (minutes per boss/run, or a per-hour rate), when the game link has one
 const linkMeasured = key => store.get("linkUseMeasured", true) && LINK.speeds[key] ? LINK.speeds[key].min : 0;
 // your purse right now: from the game's sidebar when it's recent, else from the API
@@ -3976,7 +4015,7 @@ function linkCheckAlerts(fresh){
   }
 }
 // the shard money pane is heavy to work out: game events only redraw it while it's on screen (every 30 s at most)
-let MONEY_LINK_AT = 0, MONEY_STALE = false, MONEYTAB_AT = 0, MONEYTAB_STALE = false;
+let MONEY_DRAW_N = 0, MONEY_LINK_AT = 0, MONEY_STALE = false, MONEYTAB_AT = 0, MONEYTAB_STALE = false;
 const moneyOnScreen = () => { const p = document.querySelector('.pane[data-pane="money"]'); return !!(p && !p.hidden && !document.hidden && $("#moneyOut")); };
 function moneyFromLink(){
   if (!moneyOnScreen()){ MONEY_STALE = true; return; }
@@ -4074,8 +4113,25 @@ function sortPlans(list, bz, S, how){
 }
 const REALISTIC = 0.5;                // the model is optimistic (catch rates, order fills, competition): plan on half
 const WORTH = 6e6, BORDER = 3e6;      // realistic coins/hour to count as worth doing / borderline
+const moneyBase = u => ({buy:"instant", sell:"offer", minVol:10000, tax:1.25, speed:u.speed, hours:u.hours, minRate:0, depth:Math.min(4, u.depth), cap:50, sort:"daily", myRates:!!u.myRates});
+// the slow parts of moneyFindings, worked out in slices so the window keeps responding
+async function moneyWarm(S, bz, u){
+  const base = moneyBase(u);
+  await farmPlansAsync(S, bz, base);
+  await moneyResultsAsync(S, bz, {...base, buy:"order", sell:"offer", depth:u.depth});
+  await moneyResultsAsync(S, bz, {...base, buy:"instant", sell:"instant", depth:u.depth});
+}
+async function splitWarm(S, bz, u, F){
+  const budget = parseCoins(u.budget) || (CUR ? livePurse(CUR.st) + (CUR.st.bank || 0) : 0);
+  for (const p of [...F.worth, ...F.border]){
+    if (p.route !== "buy" || p.steps > 1) continue;
+    const maxOut = (p.sellVol || 0) / 7 * (p.sellShare || 0.25), ck = [bz.t, p.out, p.sell, maxOut, budget].join("|");
+    if (SPLIT_CACHE.get(ck)?.bz === bz) continue;
+    splitBuy(S, bz, p, maxOut, budget); await yieldToApp();
+  }
+}
 function moneyFindings(S, bz, u){
-  const base = {buy:"instant", sell:"offer", minVol:10000, tax:1.25, speed:u.speed, hours:u.hours, minRate:0, depth:Math.min(4, u.depth), cap:50, sort:"daily", myRates:!!u.myRates};
+  const base = moneyBase(u);
   const all = farmPlans(S, bz, base);
   const kinds = p => Object.keys(p.need.farm).length;
   const fusion = all.filter(p => !p.sellRaw && !(p.spread > 3) && (u.multi || kinds(p) === 1));
@@ -4366,9 +4422,14 @@ function initMoney(S, an){
       const bz = await loadBazaarFull(force);
       if (!$("#moneyOut")) return;
       const u = read(); store.set("moneyUI", u);
+      const my = ++MONEY_DRAW_N;
+      await moneyWarm(S, bz, u);
+      if (my !== MONEY_DRAW_N || !$("#moneyOut")) return;   // a newer redraw took over, or you left
+      const F = moneyFindings(S, bz, u);
+      await splitWarm(S, bz, u, F);
+      if (my !== MONEY_DRAW_N || !$("#moneyOut")) return;
       const el = $("#moneyOut");
       const wide = new Set([...el.querySelectorAll("table[id].all")].map(t => t.id)), y = window.scrollY;
-      const F = moneyFindings(S, bz, u);
       el.innerHTML = moneyHTML2(S, bz, u, F);
       el.querySelectorAll("details").forEach(d => { if (MONEY_OPEN.has(moneyKey(d))) d.open = true; });
       if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y);   // stay where you were reading
@@ -4660,7 +4721,7 @@ async function fillForaging(){
     const itemRows = FORAGE_ITEMS.map(([id, note, per]) => { const p = bz.m[id]; return p ? {id, note, per, bid:p.bid, ask:p.ask, vol:p.bidVol} : null; }).filter(Boolean);
     const forSet = new Set(S.list.filter(s => s.where.some(w => /Moonglade|Torrhus|Tree Gift|Fig|Mangrove|Helix|Galatea|Tranquility|Wyrmgrove|Stride|Honeycomb/.test(w.place + " " + w.method))).map(s => s.id)), forShard = s => forSet.has(s?.id);   // once per shard, not once per plan
     const shardDrops = S.list.filter(forShard).map(s => ({s, p:bz.m[s.bz], w:s.where.find(w => w.place)})).filter(x => x.p?.bid > 20000).sort((a, b) => b.p.bid - a.p.bid).slice(0, 8);
-    const plans = farmPlans(S, bz, {...MONEY_DEF, buy:"instant", sell:"offer", minVol:10000, depth:3, speed:50, hours:2})
+    const plans = (await farmPlansAsync(S, bz, {...MONEY_DEF, buy:"instant", sell:"offer", minVol:10000, depth:3, speed:50, hours:2}))
       .filter(p => Object.keys(p.need.farm).every(id => forShard(S.by[id])) && !(p.spread > 3) && !p.sellRaw).slice(0, 4);
     const money = `<div class="cols2">
       <div><h3 class="ph">What foraging pays</h3>
@@ -5085,7 +5146,7 @@ async function fillMining(){
     const itemRows = MINING_ITEMS.map(([id, note, per]) => { const p = bz.m[id]; return p ? {id, note, per, bid:p.bid, ask:p.ask, vol:p.bidVol} : null; }).filter(Boolean);
     const minSet = new Set(S.list.filter(s => s.where.some(w => MINING_AREA.test(w.place + " " + w.method))).map(s => s.id)), minShard = s => minSet.has(s?.id);   // worked out once per shard, not once per plan
     const shardDrops = S.list.filter(minShard).map(s => ({s, p:bz.m[s.bz], w:s.where.find(w => w.place && MINING_AREA.test(w.place)) || s.where.find(w => w.place)})).filter(x => x.p?.bid > 20000).sort((a, b) => b.p.bid - a.p.bid).slice(0, 10);
-    const plans = farmPlans(S, bz, {...MONEY_DEF, buy:"instant", sell:"offer", minVol:10000, depth:3, speed:50, hours:2})
+    const plans = (await farmPlansAsync(S, bz, {...MONEY_DEF, buy:"instant", sell:"offer", minVol:10000, depth:3, speed:50, hours:2}))
       .filter(p => Object.keys(p.need.farm).every(id => minShard(S.by[id])) && !(p.spread > 3) && !p.sellRaw).slice(0, 5);
     const gems = itemRows.filter(r => /FLAWLESS/.test(r.id)).sort((a, b) => b.bid - a.bid);
     const money = `<div class="cols2">
@@ -5259,6 +5320,116 @@ document.addEventListener("change", e => {
   if (id === "forgeSort" || id === "forgeSell") { store.set(id, e.target.value); fillMining(); }
   else if (id === "forgeOnlyMine") { store.set(id, e.target.checked); fillMining(); }
 });
+
+// ---------- Greenhouse mutations: coins per harvest and per day from your Farming Fortune ----------
+// Mutations come from the wiki's Mutations page (refreshed weekly): spawn chance per growth cycle, growth stages and base
+// crop drops. Crop drops scale with fortune like the wiki's formula:
+//   amount = base × (1 + Farming Fortune/100 + Crop Fortune/100) × (1 + yield bonus)
+// Growth cycle = 4 h / (1 + 2.5% per unique crop + 0.25% per Crop Growth + 5% per Desk Growth Speed tier (tier 9 = 50%)),
+// never under 1 h 45 min. A spot is harvested every (1 / spawn chance + growth stages) cycles.
+const GH_CROP_ID = {"wheat":"WHEAT", "carrot":"CARROT_ITEM", "potato":"POTATO_ITEM", "pumpkin":"PUMPKIN", "melon slice":"MELON", "melon":"MELON", "sugar cane":"SUGAR_CANE",
+  "cactus":"CACTUS", "cocoa beans":"INK_SACK:3", "red mushroom":"RED_MUSHROOM", "brown mushroom":"BROWN_MUSHROOM", "nether wart":"NETHER_STALK",
+  "moonflower":"MOONFLOWER", "sunflower":"DOUBLE_PLANT", "wild rose":"WILD_ROSE"};
+const GH_ENCH = {WHEAT:"ENCHANTED_WHEAT", CARROT_ITEM:"ENCHANTED_CARROT", POTATO_ITEM:"ENCHANTED_POTATO", PUMPKIN:"ENCHANTED_PUMPKIN", MELON:"ENCHANTED_MELON", SUGAR_CANE:"ENCHANTED_SUGAR",
+  CACTUS:"ENCHANTED_CACTUS_GREEN", "INK_SACK:3":"ENCHANTED_COCOA", NETHER_STALK:"ENCHANTED_NETHER_STALK", RED_MUSHROOM:"ENCHANTED_RED_MUSHROOM", BROWN_MUSHROOM:"ENCHANTED_BROWN_MUSHROOM",
+  MOONFLOWER:"ENCHANTED_MOONFLOWER", DOUBLE_PLANT:"ENCHANTED_SUNFLOWER", WILD_ROSE:"ENCHANTED_WILD_ROSE"};
+const GH_VINE = {COMMON:0.15, UNCOMMON:0.2, RARE:0.25, EPIC:0.3, LEGENDARY:0.4};   // Ethereal Vine chance per mutation harvest
+const GH = {data:null, loading:null};
+function parseMutations(t){
+  const out = [], start = t.indexOf("== List of Mutations =="), body = t.slice(start, t.indexOf("\n|}", start));
+  for (const row of body.split(/\n\|-\n/).slice(1)){
+    const cells = []; for (const line of row.split("\n")){ if (/^\|(?!\})/.test(line)) cells.push(line.replace(/^\|\s*(class="ct"\s*\|\s*)?/, "")); else if (cells.length) cells[cells.length - 1] += "\n" + line; }
+    const name = (cells[1]?.match(/\[\[([^\]|]+)/) || [])[1]; if (!name) continue;
+    const rarity = ((cells[2] || "").match(/\{\{(Common|Uncommon|Rare|Epic|Legendary|Mythic|Special)\}\}/) || [])[1]?.toUpperCase() || "COMMON";
+    const ch = (cells[3] || "").match(/\{\{Chance\|([\d.]+)%/), stages = parseInt(cells[5]) || 0;
+    const dc = cells.find(c => /\{\{Item List\|/.test(c)) || "", drops = [...dc.matchAll(/\{\{Item\|([^|}]+)\|amount=([\d,.]+)/g)].map(m => [m[1].trim(), +m[2].replace(/,/g, "")]);
+    const size = ((cells[7] || "").match(/Size:'''\s*(\d+x\d+)/) || [])[1] || "1x1", xp = +(((cells[cells.length - 1] || "").match(/Skill XP\|([\d,]+)/) || [])[1] || "0").replace(/,/g, "");
+    const needs = wikiTxt((((cells[7] || "").match(/Spreading Conditions:'''\s*([^\n]*)/) || [])[1] || "").replace(/<ref[\s\S]*?<\/ref>/g, "").replace(/\{\{Item\|([^|}]+)\|amount=(\d+)\}\}/g, "$2× $1"));
+    out.push({name, id:name.toUpperCase().replace(/[^A-Z0-9]+/g, "_"), rarity, chance:ch ? +ch[1] / 100 : 0, stages, drops, size, xp, needs});
+  }
+  return out;
+}
+function loadMutations(){
+  if (GH.data) return Promise.resolve(GH.data);
+  return GH.loading ||= cachedJSON(WIKI_API + "?action=query&prop=revisions&rvprop=content&rvslots=main&format=json&formatversion=2&origin=*&titles=Mutations", 7 * 86400e3)
+    .then(j => { const L = parseMutations(j.query?.pages?.[0]?.revisions?.[0]?.slots?.main?.content || ""); if (!L.length) throw new Error("No mutations found on the wiki page."); return GH.data = L; })
+    .catch(e => { GH.loading = null; throw e; });
+}
+// best coins for one crop item: NPC, raw on the Bazaar, or compacted into its enchanted form (crops are auto-compacted in the Greenhouse)
+function ghCropValue(id){
+  const npc = RES?.byId?.[id]?.npc_sell_price || 0, raw = mkt(id)?.sell || 0, e = GH_ENCH[id] ? (mkt(GH_ENCH[id])?.sell || 0) / 160 : 0;
+  const best = Math.max(npc, raw, e); return {v:best, how:!best ? "" : best === npc ? "NPC" : best === e ? "enchanted on Bazaar" : "Bazaar"};
+}
+const GH_DEF = {ff:0, cf:0, unique:10, speed:0, plantYield:0, growth:0, boost:0, spots:1, sort:"day", q:""};
+function ghIn(){ return {...GH_DEF, ...store.get("ghIn", {})}; }
+function ghCycleH(o){
+  const d = Math.max(0, Math.min(9, +o.speed || 0)), u = Math.max(0, Math.min(10, +o.unique || 0));
+  const sec = 14400 / (1 + 0.025 * u + 0.0025 * (+o.growth || 0) + (d === 9 ? 0.5 : 0.05 * d));
+  return Math.max(6301, sec) / 3600;
+}
+function ghMult(o){
+  const y = Math.min(0.25, 0.025 * Math.max(0, Math.min(10, +o.unique || 0))) + 0.02 * Math.max(0, Math.min(10, +o.plantYield || 0)) + (+o.boost || 0) / 100;
+  return (1 + (+o.ff || 0) / 100 + (+o.cf || 0) / 100) * (1 + y);
+}
+function ghRows(L, o){
+  const mult = ghMult(o), T = ghCycleH(o), vine = mkt("ETHEREAL_VINE")?.sell || 0;
+  return L.map(m => {
+    const drops = m.drops.map(([n, a]) => { const id = GH_CROP_ID[n.toLowerCase()] || idByName(n), cv = id ? ghCropValue(id) : {v:0, how:""}; return {n, id, base:a, amt:a * mult, v:cv.v, how:cv.how}; });
+    const crops = drops.reduce((s, d) => s + d.amt * d.v, 0), vineV = (GH_VINE[m.rarity] || 0) * vine;
+    const perHarvest = crops + vineV, cycles = m.chance ? 1 / m.chance + m.stages : 0, hours = cycles * T;
+    const bz = BZFULL?.m?.[m.id];
+    return {...m, drops, crops, vineV, perHarvest, hours, perDay:hours ? perHarvest * 24 / hours * Math.max(1, +o.spots || 1) : 0, xpDay:hours ? m.xp * 24 / hours * Math.max(1, +o.spots || 1) : 0,
+      sellNow:bz ? bz.bid * 0.9875 : 0, buyNow:bz ? bz.ask : 0, base0:drops.reduce((s, d) => s + d.base * d.v, 0) + vineV};
+  });
+}
+function ghTableHTML(L, o){
+  const q = String(o.q || "").toLowerCase();
+  const rows = ghRows(L, o).filter(r => !q || (r.name + " " + r.drops.map(d => d.n).join(" ")).toLowerCase().includes(q))
+    .sort((a, b) => o.sort === "harvest" ? b.perHarvest - a.perHarvest : o.sort === "xp" ? b.xpDay - a.xpDay : (b.perDay - a.perDay) || (b.perHarvest - a.perHarvest));
+  return `<div class="card"><table id="ghTab" data-limit="25"><thead><tr><th>Mutation</th><th>Harvest every</th><th>Drops at your fortune</th><th class="mnum">Coins per harvest</th><th class="mnum">Coins per day${+o.spots > 1 ? ` (${+o.spots} spots)` : " per spot"}</th><th class="mnum">On the Bazaar</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td><b>${rar(r.rarity, r.name)}</b><div class="muted small">${esc(prettyKey(r.rarity))}${r.size !== "1x1" ? ` · ${r.size}` : ""}${r.needs ? ` · needs ${esc(r.needs)}` : ""}</div></td>
+      <td class="small">${r.hours ? `${hrsTxt(r.hours)}<div class="muted">${r.chance ? `${Math.round(r.chance * 100)}% spawn` : ""}${r.stages ? ` + ${r.stages} stages` : ""}</div>` : '<span class="muted">special</span>'}</td>
+      <td class="small" style="white-space:nowrap">${r.drops.length ? r.drops.map(d => `${fmt(Math.round(d.amt))}× ${d.id ? ilink(d.id, esc(d.n)) : esc(d.n)}${d.v ? ` <span class="muted">@ ${d.v.toFixed(1)}${d.how === "NPC" ? "" : ` ${esc(d.how)}`}</span>` : ""}`).join("<br>") : '<span class="muted">no crops</span>'}${r.vineV ? `<div class="muted">+ ${Math.round((GH_VINE[r.rarity] || 0) * 100)}% Ethereal Vine ≈ ${fmt(r.vineV)}</div>` : ""}</td>
+      <td class="mnum"><b>${fmt(r.perHarvest)}</b><div class="muted small">${fmt(r.base0)} with no fortune</div></td>
+      <td class="mnum"><b class="good">${r.perDay ? fmt(r.perDay) : "—"}</b>${r.xpDay ? `<div class="muted small">${fmt(r.xpDay)} Farming XP</div>` : ""}</td>
+      <td class="mnum small">${r.sellNow ? `sell ${fmt(r.sellNow)}<div class="muted">buy ${fmt(r.buyNow)}</div>` : '<span class="muted">—</span>'}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No mutation matches.</td></tr>'}
+    </tbody></table></div>`;
+}
+async function fillGreenhouse(){
+  const out = $("#ghOut"); if (!out) return;
+  try {
+    const [L] = await Promise.all([loadMutations(), loadBazaarFull(false), loadPrices()]);
+    if ($("#ghOut") !== out) return;
+    const o = ghIn(), live = linkStats()?.vals?.["Farming Fortune"];
+    const num = (k, label, tip, max) => `<label class="small" title="${esc(tip)}">${label}<br><input type="number" data-gh="${k}" value="${esc(o[k])}" min="0"${max ? ` max="${max}"` : ""} style="width:110px"></label>`;
+    out.innerHTML = `<h3 class="ph">🧬 Greenhouse mutation money</h3>
+      <p class="muted small">Enter your Farming Fortune and see what each mutation makes from its crop drops. Crops are valued at the best of NPC, Bazaar, or compacted into their enchanted form.</p>
+      <div class="toolbar" style="flex-wrap:wrap;align-items:flex-end;gap:12px">
+        ${num("ff", "<b>Farming Fortune</b>", "Your Farming Fortune while harvesting in the Greenhouse")}
+        ${live ? `<button class="ghost" id="ghLive" title="From the game link">🎮 Use ${esc(live)}</button>` : ""}
+        ${num("cf", "Crop Fortune", "Crop-specific fortune (e.g. from your tool). Applies to every crop here; leave 0 if unsure")}
+        ${num("unique", "Unique crops (0–10)", "Different crop types in your Greenhouses: +2.5% yield and +2.5% growth speed each (Flora attribute shares the +25% cap)", 10)}
+        ${num("plantYield", "Desk: Plant Yield (0–10)", "Desk → Garden → Greenhouse → Plant Yield upgrades: +2% yield each", 10)}
+        ${num("speed", "Desk: Growth Speed (0–9)", "Desk → Garden → Greenhouse → Growth Speed upgrades: +5% each, tier 9 = +50%", 9)}
+        ${num("growth", "Crop Growth", "Crop Growth stat: +0.25% growth speed each")}
+        <label class="small" title="Effect from neighbouring plants on the mutation">Harvest effect<br><select data-gh="boost">${[[0, "None"], [20, "Harvest Boost +20%"], [30, "Improved Harvest Boost +30%"], [-20, "Harvest Loss −20%"]].map(([v, l]) => `<option value="${v}"${+o.boost === v ? " selected" : ""}>${l}</option>`).join("")}</select></label>
+        ${num("spots", "Spots per mutation", "How many places in your setup grow it at once")}
+      </div>
+      <div id="ghSum" class="muted small" style="margin:6px 0 10px"></div>
+      <div class="toolbar"><input data-gh="q" value="${esc(o.q)}" placeholder="Filter by mutation or crop…" style="min-width:240px">
+        <select data-gh="sort"><option value="day"${o.sort === "day" ? " selected" : ""}>Most coins per day</option><option value="harvest"${o.sort === "harvest" ? " selected" : ""}>Most coins per harvest</option><option value="xp"${o.sort === "xp" ? " selected" : ""}>Most Farming XP per day</option></select></div>
+      <div id="ghTable"></div>
+      <p class="muted small">Drop amounts, spawn chances and growth stages are from the wiki's Mutations page (refreshed weekly); the wiki notes drops may still change. "Harvest every" assumes the spot's spawn conditions are met: on average 1 ÷ spawn chance cycles to appear, then its growth stages. Coins per day assume you harvest as soon as it's ready and keep the setup watered. Not counted: Bonus Drops rolls, armor drops, and the value of the mutation item itself (shown on the right for buying seeds or selling spares).</p>`;
+    const draw = () => {
+      const o = ghIn(), T = ghCycleH(o), m = ghMult(o);
+      $("#ghSum").innerHTML = `Your yield: <b>×${m.toFixed(2)}</b> of the base drops · growth cycle <b>${hrsTxt(T)}</b>${T <= 1.751 ? " (the minimum)" : ""}`;
+      const tb = $("#ghTable"); tb.innerHTML = ghTableHTML(L, o); limitRows(tb);
+    };
+    draw();
+    out.addEventListener("input", e => { const k = e.target.dataset?.gh; if (!k) return; const o = ghIn(); o[k] = e.target.type === "number" ? (e.target.value === "" ? 0 : +e.target.value) : e.target.value; store.set("ghIn", o); draw(); });
+    $("#ghLive")?.addEventListener("click", () => { const o = ghIn(); o.ff = parseFloat(String(live).replace(/,/g, "")) || 0; store.set("ghIn", o); out.querySelector('[data-gh="ff"]').value = o.ff; draw(); });
+  } catch (e){ if ($("#ghOut") === out) out.innerHTML = `<div class="msg err">Couldn't load the mutation list: ${esc(e.message)}</div>`; }
+}
 
 // ---------- per-skill money sections ----------
 // Farming: best way to sell each crop right now (NPC, raw on Bazaar, or as the enchanted version)
@@ -6126,7 +6297,7 @@ const SUB_INDEX = {
   acc:[["best","Best MP per coin"],["up","Upgrades"],["miss","Missing families"],["tips","Milestones & tips"],["powers","💎 Powers"]],
   bestiary:[["closest","Cheapest next tiers"],["area","By area"],["all","All families"]],
   fishing:[["trophy","🏆 Trophy Fish"],["sea","🐙 Sea creatures"],["shards","🔮 Fishing shards"]],
-  garden:[["overview","Overview"],["ms","🌾 Crop milestones"],["visitors","🧑‍🌾 Visitors"],["shards","🔮 Farming shards"]],
+  garden:[["overview","Overview"],["ms","🌾 Crop milestones"],["visitors","🧑‍🌾 Visitors"],["jacob","🏆 Jacob's Contests"],["pests","🐛 Pests"],["money","💰 Selling crops"],["greenhouse","🧬 Greenhouse mutations"],["shards","🔮 Farming shards"]],
   minions:[["plan","💰 Cheapest next slots"],["all","All minions"]],
   upgrades:[["cons","🍽 Permanent consumables"],["acct","🏦 Account & events"]],
   rift:[["overview","Overview"],["quests","📜 Quests"]],
@@ -6150,14 +6321,14 @@ const RELATED = {
   slayers:["bestiary","mf","slayers/shards","combat"],
   combat:["crimson/kuudra","slayers","mf","skills/COMBAT"],
   bestiary:["mf","slayers","map","skills/COMBAT"],
-  garden:["skills/FARMING","garden/shards","money"],
+  garden:["skills/FARMING","garden/greenhouse","garden/shards","money"],
   mining:["skills/MINING","mining/forge","mining/shards","money"],
   foraging:["skills/FORAGING","foraging/shards","money"],
   fishing:["skills/FISHING","fishing/shards","bestiary","crimson"],
   map:["calendar","crimson","rift"],
   crimson:["combat","crimson/shards","map/crimson"],
   rift:["map/rift","calendar"],
-  money:["shards/money","mining/forge","pets/flips","minions","plan"],
+  money:["shards/money","garden/greenhouse","mining/forge","pets/flips","minions","plan"],
   plan:["auto","money"],
   auto:["plan","money"],
 };
@@ -7176,6 +7347,7 @@ function viewGarden(st){
     ${subTabs("garden", [{id:"overview", label:"Overview", html:gardenHTML(st, true)}, {id:"ms", label:"🌾 Crop milestones", html:msPane}, {id:"visitors", label:"🧑‍🌾 Visitors", count:g ? served.size : null, html:visPane},
       {id:"jacob", label:"🏆 Jacob's Contests", html:jacobPane}, {id:"pests", label:"🐛 Pests", html:pests},
       {id:"money", label:"💰 Selling crops", html:needMarket() ? farmingMoneyHTML() : '<div class="muted">Loading prices…</div>'},
+      {id:"greenhouse", label:"🧬 Greenhouse mutations", html:(setTimeout(fillGreenhouse, 0), '<div id="ghOut"><div class="muted">Loading mutations and prices…</div></div>')},
       {id:"shards", label:"🔮 Farming shards", html:`<div data-shard-ctx="farming,garden" data-title="Every shard for farming and the Garden" data-open="1"></div>`}])}`;
 }
 
